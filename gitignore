@@ -1,0 +1,49 @@
+# .gitignore for Raga Spatial project
+# Do NOT push these to GitHub
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Conda
+.conda/
+
+# Model weights (too large for GitHub)
+backend/models/*.ckpt
+backend/models/*.pt
+backend/models/*.pth
+backend/models/.cache/
+
+# Audio files
+backend/outputs/
+*.mp3
+*.wav
+*.flac
+*.aac
+
+# Environment variables
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
