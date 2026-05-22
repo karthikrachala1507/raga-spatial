@@ -1,0 +1,14 @@
+backend/venv/
+backend/models/
+backend/outputs/
+backend/core/__pycache__/
+backend/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+*.ckpt
+*.pt
+*.wav
+*.mp3
+*.flac
+.env
