@@ -1,248 +1,344 @@
-"""
-Raga Spatial — API Routes
-All endpoints the React frontend will call.
-"""
+# Raga Spatial - api/routes.py
+# Phase 10: Full pipeline connected to FastAPI endpoints
 
-import uuid
 import os
+import uuid
+import time
 import json
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+import shutil
+import threading
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
-import aiofiles
 
 router = APIRouter()
 
-# ── In-memory job store (use Redis in production) ─────────────────────────
-# Format: { job_id: { status, step, progress, result_path, error } }
-jobs = {}
+# ── Directories ───────────────────────────────────────────────────────────────
+BASE_DIR    = os.path.dirname(os.path.dirname(__file__))
+UPLOAD_DIR  = os.path.join(BASE_DIR, "outputs", "uploads")
+STEMS_DIR   = os.path.join(BASE_DIR, "outputs", "stems")
+SPATIAL_DIR = os.path.join(BASE_DIR, "outputs", "spatial")
+JSON_DIR    = os.path.join(BASE_DIR, "outputs", "json")
+
+for d in [UPLOAD_DIR, STEMS_DIR, SPATIAL_DIR, JSON_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+# ── In-memory job store ───────────────────────────────────────────────────────
+# { job_id: { "status", "step", "message", "result", "error", "created_at" } }
+JOBS = {}
+JOBS_LOCK = threading.Lock()
 
 
-# ══════════════════════════════════════════════════════════════
-# POST /api/upload
-# Accept audio file, save it, return a job_id
-# ══════════════════════════════════════════════════════════════
+def _update_job(job_id, **kwargs):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(kwargs)
+
+
+def _run_pipeline_thread(job_id, audio_path):
+    """Run full pipeline in background thread."""
+    try:
+        _update_job(job_id, status="running", step=1,
+                    message="Starting pipeline...")
+
+        def progress(step, msg):
+            _update_job(job_id, step=step, message=msg)
+
+        from core.renderer import run_full_pipeline
+        result = run_full_pipeline(
+            audio_path        = audio_path,
+            job_id            = job_id,
+            progress_callback = progress,
+        )
+
+        _update_job(job_id,
+                    status  = "complete",
+                    step    = 7,
+                    message = "Pipeline complete",
+                    result  = result)
+
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        print("[Routes] Pipeline error for job " + job_id + ":\n" + err)
+        _update_job(job_id,
+                    status  = "error",
+                    message = str(e),
+                    error   = err)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
 @router.post("/upload")
 async def upload_song(file: UploadFile = File(...)):
-    # Validate file type
-    allowed = [".mp3", ".wav", ".flac", ".aac", ".ogg"]
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in allowed:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {ext}. Use MP3, WAV, FLAC, AAC.")
+    """
+    Upload a song and start the full Raga Spatial pipeline.
 
-    # Create unique job id
-    job_id = str(uuid.uuid4())
+    Returns job_id immediately. Poll /status/{job_id} for progress.
+    Supported formats: mp3, wav, flac, m4a, ogg
+    """
+    allowed = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"}
+    ext     = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400,
+            detail="Unsupported format. Use: " + ", ".join(allowed))
+
+    job_id    = str(uuid.uuid4())[:8]
+    save_path = os.path.join(UPLOAD_DIR, job_id + ext)
 
     # Save uploaded file
-    upload_path = f"outputs/uploads/{job_id}{ext}"
-    async with aiofiles.open(upload_path, "wb") as f:
+    with open(save_path, "wb") as f:
         content = await file.read()
-        await f.write(content)
+        f.write(content)
+
+    file_mb = round(os.path.getsize(save_path) / (1024*1024), 2)
+    print("[Routes] Upload: " + file.filename
+          + " -> " + job_id + " (" + str(file_mb) + " MB)")
 
     # Register job
-    jobs[job_id] = {
-        "job_id": job_id,
-        "filename": file.filename,
-        "status": "uploaded",
-        "step": "Waiting to start",
-        "progress": 0,
-        "upload_path": upload_path,
-        "result": None,
-        "error": None
-    }
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "job_id":     job_id,
+            "filename":   file.filename,
+            "audio_path": save_path,
+            "status":     "queued",
+            "step":       0,
+            "message":    "Queued",
+            "result":     None,
+            "error":      None,
+            "created_at": time.time(),
+        }
 
-    return {
-        "job_id": job_id,
-        "filename": file.filename,
-        "message": "Upload successful. Call /api/analyze/{job_id} to start."
-    }
+    # Start pipeline in background thread
+    thread = threading.Thread(
+        target = _run_pipeline_thread,
+        args   = (job_id, save_path),
+        daemon = True,
+    )
+    thread.start()
 
-
-# ══════════════════════════════════════════════════════════════
-# POST /api/analyze/{job_id}
-# Trigger the full AI pipeline on the uploaded file
-# ══════════════════════════════════════════════════════════════
-@router.post("/analyze/{job_id}")
-async def analyze_song(job_id: str, background_tasks: BackgroundTasks):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[job_id]
-    if job["status"] == "processing":
-        return {"message": "Already processing", "job_id": job_id}
-
-    # Start pipeline in background
-    jobs[job_id]["status"] = "processing"
-    background_tasks.add_task(run_pipeline, job_id)
-
-    return {
-        "job_id": job_id,
-        "message": "Analysis started. Poll /api/status/{job_id} for progress."
-    }
+    return JSONResponse({
+        "job_id":    job_id,
+        "filename":  file.filename,
+        "status":    "queued",
+        "message":   "Pipeline started. Poll /status/" + job_id,
+        "endpoints": {
+            "status":   "/status/"   + job_id,
+            "result":   "/result/"   + job_id,
+            "download": "/download/" + job_id,
+        }
+    })
 
 
-# ══════════════════════════════════════════════════════════════
-# GET /api/status/{job_id}
-# Frontend polls this every 2s to show progress
-# ══════════════════════════════════════════════════════════════
 @router.get("/status/{job_id}")
-def get_status(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def get_status(job_id: str):
+    """
+    Get pipeline status for a job.
 
-    job = jobs[job_id]
-    return {
-        "job_id": job_id,
-        "status": job["status"],        # uploaded | processing | complete | error
-        "step": job["step"],            # human-readable current step
-        "progress": job["progress"],    # 0–100
-        "filename": job["filename"],
-        "error": job["error"]
-    }
+    Returns:
+        status   : "queued" | "running" | "complete" | "error"
+        step     : 0-7 (current pipeline step)
+        message  : human-readable progress message
+        progress : 0-100 percentage
+    """
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404,
+            detail="Job not found: " + job_id)
+
+    progress_pct = round(job["step"] / 7 * 100)
+
+    return JSONResponse({
+        "job_id":   job_id,
+        "status":   job["status"],
+        "step":     job["step"],
+        "message":  job["message"],
+        "progress": progress_pct,
+        "filename": job.get("filename", ""),
+    })
 
 
-# ══════════════════════════════════════════════════════════════
-# GET /api/result/{job_id}
-# Returns the full JSON metadata after analysis is complete
-# ══════════════════════════════════════════════════════════════
 @router.get("/result/{job_id}")
-def get_result(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def get_result(job_id: str):
+    """
+    Get full pipeline result for a completed job.
+    Includes detection summary, motion events, spatial timeline.
+    """
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
 
-    job = jobs[job_id]
-    if job["status"] != "complete":
-        raise HTTPException(status_code=400, detail=f"Job not complete yet. Status: {job['status']}")
+    if job is None:
+        raise HTTPException(status_code=404,
+            detail="Job not found: " + job_id)
 
-    json_path = f"outputs/json/{job_id}.json"
-    if not os.path.exists(json_path):
-        raise HTTPException(status_code=404, detail="Result JSON not found")
+    if job["status"] == "running" or job["status"] == "queued":
+        return JSONResponse({
+            "job_id":  job_id,
+            "status":  job["status"],
+            "message": "Pipeline still running. Step "
+                       + str(job["step"]) + "/7: " + job["message"],
+        }, status_code=202)
 
-    with open(json_path, "r") as f:
-        return JSONResponse(content=json.load(f))
+    if job["status"] == "error":
+        return JSONResponse({
+            "job_id":  job_id,
+            "status":  "error",
+            "message": job["message"],
+        }, status_code=500)
+
+    result = job.get("result", {})
+
+    # Load JSON output file if available
+    json_path = result.get("json_path") if result else None
+    if json_path and os.path.exists(json_path):
+        with open(json_path) as f:
+            full_result = json.load(f)
+        return JSONResponse(full_result)
+
+    # Fallback: return in-memory result
+    return JSONResponse({
+        "job_id":            job_id,
+        "status":            "complete",
+        "duration_sec":      result.get("duration_sec"),
+        "tempo_bpm":         result.get("tempo_bpm"),
+        "detection_summary": result.get("detection_summary", []),
+        "motion_summary":    result.get("motion_summary", {}),
+        "motion_events":     result.get("motion_events", []),
+        "spatial_wav":       result.get("spatial_wav"),
+    })
 
 
-# ══════════════════════════════════════════════════════════════
-# GET /api/download/{job_id}
-# Download the final output_spatial.wav
-# ══════════════════════════════════════════════════════════════
 @router.get("/download/{job_id}")
-def download_result(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def download_spatial(job_id: str):
+    """
+    Download the spatial WAV output for a completed job.
+    This is the binaural audio — listen with headphones.
+    """
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
 
-    wav_path = f"outputs/spatial/{job_id}_spatial.wav"
+    if job is None:
+        raise HTTPException(status_code=404,
+            detail="Job not found: " + job_id)
+
+    if job["status"] != "complete":
+        raise HTTPException(status_code=409,
+            detail="Job not complete yet. Status: " + job["status"])
+
+    result    = job.get("result", {})
+    wav_path  = result.get("spatial_wav") if result else None
+
+    if not wav_path or not os.path.exists(wav_path):
+        # Try to find it by convention
+        wav_path = os.path.join(SPATIAL_DIR, job_id + "_spatial.wav")
+
     if not os.path.exists(wav_path):
-        raise HTTPException(status_code=404, detail="Spatial WAV not ready yet")
+        raise HTTPException(status_code=404,
+            detail="Spatial WAV not found for job: " + job_id)
 
     return FileResponse(
-        wav_path,
-        media_type="audio/wav",
-        filename=f"raga_spatial_{job_id[:8]}.wav"
+        path             = wav_path,
+        media_type       = "audio/wav",
+        filename         = job_id + "_spatial.wav",
+        headers          = {"Content-Disposition":
+                            "attachment; filename=" + job_id + "_spatial.wav"}
     )
 
 
-# ══════════════════════════════════════════════════════════════
-# GET /api/jobs
-# List all jobs (useful for debugging)
-# ══════════════════════════════════════════════════════════════
+@router.get("/download/{job_id}/stems/{stem_name}")
+async def download_stem(job_id: str, stem_name: str):
+    """
+    Download a separated stem (vocals or instrumental).
+    stem_name: "vocals" or "instrumental"
+    """
+    if stem_name not in ("vocals", "instrumental"):
+        raise HTTPException(status_code=400,
+            detail="stem_name must be 'vocals' or 'instrumental'")
+
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404,
+            detail="Job not found: " + job_id)
+
+    if job["status"] != "complete":
+        raise HTTPException(status_code=409,
+            detail="Job not complete yet. Status: " + job["status"])
+
+    stem_path = os.path.join(STEMS_DIR, job_id + "_" + stem_name + ".wav")
+    if not os.path.exists(stem_path):
+        raise HTTPException(status_code=404,
+            detail="Stem not found: " + stem_name)
+
+    return FileResponse(
+        path       = stem_path,
+        media_type = "audio/wav",
+        filename   = job_id + "_" + stem_name + ".wav",
+    )
+
+
 @router.get("/jobs")
-def list_jobs():
-    return [
-        {
-            "job_id": j["job_id"],
-            "filename": j["filename"],
-            "status": j["status"],
-            "progress": j["progress"]
-        }
-        for j in jobs.values()
-    ]
+async def list_jobs():
+    """List all jobs with their current status."""
+    with JOBS_LOCK:
+        jobs_list = [
+            {
+                "job_id":   jid,
+                "filename": j.get("filename", ""),
+                "status":   j["status"],
+                "step":     j["step"],
+                "message":  j["message"],
+                "created_at": j.get("created_at", 0),
+            }
+            for jid, j in JOBS.items()
+        ]
+
+    jobs_list.sort(key=lambda x: x["created_at"], reverse=True)
+    return JSONResponse({"jobs": jobs_list, "total": len(jobs_list)})
 
 
-# ══════════════════════════════════════════════════════════════
-# PIPELINE RUNNER — called in background
-# This will later call each core module in sequence
-# ══════════════════════════════════════════════════════════════
-def update_job(job_id: str, step: str, progress: int):
-    """Helper to update job status."""
-    jobs[job_id]["step"] = step
-    jobs[job_id]["progress"] = progress
-    print(f"[{job_id[:8]}] {progress}% — {step}")
+@router.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a job and clean up its output files."""
+    with JOBS_LOCK:
+        job = JOBS.pop(job_id, None)
+
+    if job is None:
+        raise HTTPException(status_code=404,
+            detail="Job not found: " + job_id)
+
+    # Clean up files
+    files_deleted = []
+    for path in [
+        job.get("audio_path"),
+        os.path.join(SPATIAL_DIR, job_id + "_spatial.wav"),
+        os.path.join(STEMS_DIR,   job_id + "_vocals.wav"),
+        os.path.join(STEMS_DIR,   job_id + "_instrumental.wav"),
+        os.path.join(JSON_DIR,    job_id + "_output.json"),
+    ]:
+        if path and os.path.exists(path):
+            os.remove(path)
+            files_deleted.append(path)
+
+    return JSONResponse({
+        "job_id":        job_id,
+        "deleted":       True,
+        "files_deleted": len(files_deleted),
+    })
 
 
-def run_pipeline(job_id: str):
-    """
-    Orchestrates the full AI pipeline.
-    Each step will call the real core module once built.
-    For now, steps are stubbed so the API works end-to-end.
-    """
-    try:
-        job = jobs[job_id]
-        upload_path = job["upload_path"]
-
-        # ── STEP 1: Preprocess ────────────────────────────────
-        update_job(job_id, "Preprocessing audio...", 10)
-        # from core.preprocess import preprocess_audio
-        # audio, sr = preprocess_audio(upload_path)
-
-        # ── STEP 2: Source Separation ─────────────────────────
-        update_job(job_id, "BS-RoFormer: separating stems...", 25)
-        # from core.separator import separate_stems
-        # stems = separate_stems(audio, sr, job_id)
-
-        # ── STEP 3: Feature Extraction ────────────────────────
-        update_job(job_id, "Extracting mel spectrograms...", 40)
-        # from core.preprocess import extract_features
-        # features = extract_features(audio, sr)
-
-        # ── STEP 4: BEATs Detection ───────────────────────────
-        update_job(job_id, "BEATs: detecting instruments...", 55)
-        # from core.detector import detect_instruments
-        # detections = detect_instruments(audio, sr)
-
-        # ── STEP 5: Motion Detection ──────────────────────────
-        update_job(job_id, "Analyzing motion events...", 68)
-        # from core.motion import detect_motion_events
-        # motion_events = detect_motion_events(features, detections)
-
-        # ── STEP 6: Spatial Assignment ────────────────────────
-        update_job(job_id, "Assigning spatial positions...", 78)
-        # from core.spatial import assign_directions
-        # directions = assign_directions(detections, motion_events)
-
-        # ── STEP 7: HRTF Convolution ──────────────────────────
-        update_job(job_id, "SOFA HRTF: rendering binaural audio...", 88)
-        # from core.hrtf import apply_hrtf
-        # binaural_stems = apply_hrtf(stems, directions)
-
-        # ── STEP 8: Final Render ──────────────────────────────
-        update_job(job_id, "Rendering final spatial WAV...", 95)
-        # from core.renderer import render_final
-        # render_final(binaural_stems, job_id)
-
-        # ── STEP 9: Export JSON ───────────────────────────────
-        update_job(job_id, "Exporting metadata JSON...", 98)
-        dummy_result = {
-            "job_id": job_id,
-            "filename": job["filename"],
-            "duration": 0,
-            "instruments": [],
-            "motion_events": [],
-            "spatial_assignments": {},
-            "note": "Pipeline stubs active — real modules coming in Phase 3+"
-        }
-        json_path = f"outputs/json/{job_id}.json"
-        with open(json_path, "w") as f:
-            json.dump(dummy_result, f, indent=2)
-
-        # ── DONE ──────────────────────────────────────────────
-        jobs[job_id]["status"] = "complete"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["step"] = "Complete"
-        jobs[job_id]["result"] = json_path
-        print(f"[{job_id[:8]}] Pipeline complete.")
-
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
-        jobs[job_id]["step"] = f"Error: {e}"
-        print(f"[{job_id[:8]}] ERROR: {e}")
+@router.get("/health")
+async def health_check():
+    """Health check — confirms server is running and models are available."""
+    from core.renderer import get_pipeline_status
+    status = get_pipeline_status()
+    all_ok = all(v == "ok" for v in status.values())
+    return JSONResponse({
+        "status":          "ok" if all_ok else "degraded",
+        "pipeline_status": status,
+        "active_jobs":     sum(1 for j in JOBS.values()
+                               if j["status"] == "running"),
+        "total_jobs":      len(JOBS),
+    })
