@@ -13,11 +13,11 @@ STEMS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "outputs",
 MELBAND_MODEL    = os.path.join(MODELS_DIR, "MelBandRoformer.ckpt")
 BSROFORMER_MODEL = os.path.join(MODELS_DIR, "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
 
-TARGET_SR     = 44100
-CHUNK_SIZE    = 352800   # ~8 seconds at 44100Hz
-OVERLAP       = 4        # 75% overlap (hop = CHUNK_SIZE // OVERLAP)
-MIN_CHUNK     = 8192     # minimum samples to feed the model safely
-DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
+TARGET_SR  = 44100
+CHUNK_SIZE = 352800
+OVERLAP    = 4
+MIN_CHUNK  = 8192
+DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def separate_stems(audio, sr, job_id):
@@ -40,7 +40,8 @@ def separate_stems(audio, sr, job_id):
 def load_model():
     from bs_roformer import MelBandRoformer
 
-    model_path = None
+    # Always use MelBandRoformer.ckpt — the other checkpoint has dim=512
+    # which is incompatible with our dim=384 architecture
     if os.path.exists(MELBAND_MODEL):
         model_path = MELBAND_MODEL
         print("[Separator] Loading MelBandRoformer from: " + MELBAND_MODEL)
@@ -76,8 +77,8 @@ def load_model():
         new_key = k.replace("model.", "")
         new_state_dict[new_key] = v
 
-    result  = model.load_state_dict(new_state_dict, strict=False)
-    missing = len(result.missing_keys)
+    result     = model.load_state_dict(new_state_dict, strict=False)
+    missing    = len(result.missing_keys)
     unexpected = len(result.unexpected_keys)
     print("[Separator] Loaded. Missing: " + str(missing) + " Unexpected: " + str(unexpected))
     model = model.to(DEVICE)
@@ -100,80 +101,67 @@ def prepare_audio_tensor(audio, sr):
 def run_separation(model, audio_tensor, sr):
     with torch.no_grad():
         total_samples = audio_tensor.shape[-1]
-
         if total_samples <= CHUNK_SIZE * 2:
             print("[Separator] Short audio - single pass inference")
             vocals_tensor = model(audio_tensor)
-            # model output may differ in length due to STFT padding - always trim
-            orig_len  = total_samples
-            vocals    = vocals_tensor.squeeze(0).cpu().numpy()
-            vocals    = vocals[:, :orig_len]
-            original  = audio_tensor.squeeze(0).cpu().numpy()
-            instrumental = original - vocals
+            orig_len      = total_samples
+            vocals        = vocals_tensor.squeeze(0).cpu().numpy()
+            vocals        = vocals[:, :orig_len]
+            original      = audio_tensor.squeeze(0).cpu().numpy()
+            instrumental  = original - vocals
             return vocals, instrumental
         else:
             print("[Separator] Long audio - chunked inference")
-            vocals = process_in_chunks(model, audio_tensor)
-            original = audio_tensor.squeeze(0).cpu().numpy()
+            vocals       = process_in_chunks(model, audio_tensor)
+            original     = audio_tensor.squeeze(0).cpu().numpy()
             instrumental = original - vocals
             return vocals, instrumental
 
 
 def process_in_chunks(model, audio_tensor):
-    audio         = audio_tensor.squeeze(0)           # shape: (2, total_samples)
+    audio         = audio_tensor.squeeze(0)
     total_samples = audio.shape[-1]
-    hop           = CHUNK_SIZE // OVERLAP              # 88200 samples = ~2s hop
+    hop           = CHUNK_SIZE // OVERLAP
 
     output = np.zeros((2, total_samples), dtype=np.float32)
     count  = np.zeros(total_samples,      dtype=np.float32)
 
-    # Hann window for smooth overlap-add (avoids clicks at chunk boundaries)
-    window = np.hanning(CHUNK_SIZE).astype(np.float32)  # shape: (CHUNK_SIZE,)
+    # Hann window for smooth overlap-add (prevents clicking at chunk boundaries)
+    window = np.hanning(CHUNK_SIZE).astype(np.float32)
 
     chunk_num = 0
     start     = 0
 
     while start < total_samples:
         end            = min(start + CHUNK_SIZE, total_samples)
-        chunk          = audio[:, start:end]           # (2, chunk_len)
+        chunk          = audio[:, start:end]
         orig_chunk_len = chunk.shape[-1]
 
-        # Skip tiny tail chunks the model cannot process reliably
         if orig_chunk_len < MIN_CHUNK:
             print("[Separator] Skipping tiny tail chunk of " + str(orig_chunk_len) + " samples")
             break
 
-        # Pad short chunk to CHUNK_SIZE so model always gets a full-size input
         if orig_chunk_len < CHUNK_SIZE:
             pad_size = CHUNK_SIZE - orig_chunk_len
             chunk    = torch.nn.functional.pad(chunk, (0, pad_size))
 
-        chunk_in = chunk.unsqueeze(0).to(DEVICE)       # (1, 2, CHUNK_SIZE)
+        chunk_in = chunk.unsqueeze(0).to(DEVICE)
 
         with torch.no_grad():
-            out = model(chunk_in)                      # (1, 1, 2, out_len) or (1, 2, out_len)
+            out = model(chunk_in)
 
-        # Normalise output shape to (2, out_len)
         out_np = out.squeeze(0).cpu().numpy()
         if out_np.ndim == 3:
-            out_np = out_np[0]                         # drop stem dimension if present
+            out_np = out_np[0]
 
-        # --- THE FIX ---
-        # Use actual model output length, NOT assumed CHUNK_SIZE or orig_chunk_len.
-        # MelBandRoformer STFT pads to FFT boundaries, so output is always slightly
-        # shorter than input. Using the assumed length causes the broadcast crash.
+        # Use actual model output length - never assume it equals input length
         actual_out_len = out_np.shape[-1]
+        usable_len     = min(actual_out_len, orig_chunk_len)
+        end_idx        = min(start + usable_len, total_samples)
+        copy_len       = end_idx - start
+        out_np         = out_np[:, :copy_len]
 
-        # Trim to original (unpadded) chunk region and clip to total_samples
-        usable_len = min(actual_out_len, orig_chunk_len)
-        end_idx    = min(start + usable_len, total_samples)
-        copy_len   = end_idx - start
-
-        out_np = out_np[:, :copy_len]                  # (2, copy_len)
-
-        # Apply Hann window weights for the copied region
-        win_slice = window[:copy_len]                  # (copy_len,)
-
+        win_slice = window[:copy_len]
         output[:, start:end_idx] += out_np * win_slice[np.newaxis, :]
         count[start:end_idx]     += win_slice
 
@@ -185,17 +173,20 @@ def process_in_chunks(model, audio_tensor):
 
         start += hop
 
-    # Normalise by accumulated window weights; avoid div-by-zero at uncovered tail
     count  = np.maximum(count, 1e-8)
     output = output / count[np.newaxis, :]
+
+    # Soft clip to remove convolution artifacts and reduce noise
+    output = np.tanh(output * 0.8) / 0.8
+
     return output
 
 
 def save_stem(audio, sr, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    audio    = np.clip(audio, -1.0, 1.0)
+    audio = np.clip(audio, -1.0, 1.0)
     if audio.ndim == 2:
-        audio = audio.T                                # soundfile expects (samples, channels)
+        audio = audio.T
     sf.write(path, audio, sr)
     size_mb = os.path.getsize(path) / (1024 * 1024)
     print("[Separator] Saved: " + path + " (" + str(round(size_mb, 1)) + " MB)")
