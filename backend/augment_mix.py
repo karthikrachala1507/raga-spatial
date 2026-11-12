@@ -1,7 +1,12 @@
 # Raga Spatial - augment_mix.py
 # Generates synthetic mixes from collected stems
-# Each mix has 3-6 random stems combined at random volumes
+# Each mix has 2-6 random stems combined at random volumes
 # Output: mix.wav + individual target stems for training
+#
+# v2: every saved target stem is exactly what went into mix.wav, so the
+# 8 stems sum to the mix. (v1 re-normalised each target to a 0.9 peak, which
+# made targets a median 7 dB louder than their real level in the mix.)
+# v2 mixes go to synthetic_mixes_v2; the v1 folder is left untouched.
 
 import os
 import sys
@@ -13,7 +18,7 @@ import librosa
 from tqdm import tqdm
 
 PROCESSED_DIR = r"D:\raga-spatial-data\processed\stems"
-MIXES_DIR     = r"D:\raga-spatial-data\synthetic_mixes"
+MIXES_DIR     = r"D:\raga-spatial-data\synthetic_mixes_v2"
 
 # Mix generation settings
 TARGET_SR          = 16000
@@ -108,6 +113,7 @@ def generate_mix(stems_dict, mix_idx, output_dir):
     # Load and augment each stem
     mix         = np.zeros(int(TARGET_SR * CLIP_DURATION), dtype=np.float32)
     stem_data   = {}
+    sources     = {}
     label       = np.zeros(len(CATEGORIES), dtype=np.float32)
 
     for cat in chosen_cats:
@@ -122,28 +128,27 @@ def generate_mix(stems_dict, mix_idx, output_dir):
         # Random volume for this stem in the mix
         volume = random.uniform(VOLUME_MIN, VOLUME_MAX)
 
-        # Add to mix
-        mix += audio * volume
-
-        # Store individual stem (normalized)
-        stem_norm        = audio / (np.max(np.abs(audio)) + 1e-8) * 0.9
-        stem_data[cat]   = stem_norm
+        # The target stem IS the stem's contribution to the mix (same level)
+        contribution     = (audio * volume).astype(np.float32)
+        mix             += contribution
+        stem_data[cat]   = contribution
+        sources[cat]     = os.path.basename(filepath)
         label[CAT_TO_IDX[cat]] = 1.0
 
     if not stem_data:
         return False
 
-    # Normalize mix to prevent clipping
-    mix_peak = np.max(np.abs(mix))
-    if mix_peak > 0.95:
-        mix = mix / mix_peak * 0.95
+    # Prevent clipping: ONE scale factor applied to the mix and every stem,
+    # so the stems still sum exactly to the mix.
+    peak = max([np.max(np.abs(mix))] + [np.max(np.abs(s)) for s in stem_data.values()])
+    scale = 0.95 / peak if peak > 0.95 else 1.0
+    mix = mix * scale
+    for cat in stem_data:
+        stem_data[cat] = stem_data[cat] * scale
 
     # Save mix directory
     mix_dir = os.path.join(output_dir, "mix_" + str(mix_idx).zfill(6))
     os.makedirs(mix_dir, exist_ok=True)
-
-    # Save mix
-    sf.write(os.path.join(mix_dir, "mix.wav"), mix, TARGET_SR)
 
     # Save individual stems (zero for absent categories)
     target_len = int(TARGET_SR * CLIP_DURATION)
@@ -151,13 +156,18 @@ def generate_mix(stems_dict, mix_idx, output_dir):
         stem_audio = stem_data.get(cat, np.zeros(target_len, dtype=np.float32))
         sf.write(os.path.join(mix_dir, cat + ".wav"), stem_audio, TARGET_SR)
 
-    # Save label
+    # Save label (sources = which processed clip each stem came from)
     with open(os.path.join(mix_dir, "label.json"), "w") as f:
         json.dump({
             "mix_idx":    mix_idx,
             "categories": chosen_cats,
             "label":      label.tolist(),
+            "sources":    sources,
         }, f)
+
+    # Save mix LAST: a folder only counts as complete once mix.wav exists,
+    # so an interrupted run never leaves a mix with missing stems.
+    sf.write(os.path.join(mix_dir, "mix.wav"), mix, TARGET_SR)
 
     return True
 
@@ -190,8 +200,9 @@ def main():
 
     # Check existing mixes
     os.makedirs(MIXES_DIR, exist_ok=True)
+    # Only folders that contain mix.wav are complete (it is written last)
     existing = len([d for d in os.listdir(MIXES_DIR)
-                    if os.path.isdir(os.path.join(MIXES_DIR, d))])
+                    if os.path.exists(os.path.join(MIXES_DIR, d, "mix.wav"))])
     print("[Augment] Existing mixes: " + str(existing))
     start_idx = existing
 
