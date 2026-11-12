@@ -7,9 +7,24 @@ import os
 import time
 import json
 
-# FreeSounds API - use client_id as API token directly
-CLIENT_ID     = "6JCJK4vbjS6P0htAkAKa"
-CLIENT_SECRET = "dL0JOLHWWCsm0Dvpi8WVjIYEovKsjL93RgzjLRUr"
+# FreeSounds API credentials are read from backend/.env (git-ignored) or from
+# environment variables. Never hardcode them here. See .env.example.
+def _load_env_file():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_env_file()
+CLIENT_ID     = os.environ.get("FREESOUND_CLIENT_ID", "")
+# The Client Secret is passed as the token= query parameter
+CLIENT_SECRET = os.environ.get("FREESOUND_CLIENT_SECRET", "")
 API_BASE      = "https://freesound.org/apiv2"
 
 DATA_DIR     = r"D:\raga-spatial-data\raw_stems"
@@ -230,6 +245,11 @@ def main():
     print("Target: " + str(TIER1_TARGET) + " clips per category")
     print("Save dir: " + DATA_DIR)
     print("=" * 60)
+
+    if not CLIENT_SECRET:
+        print("ERROR: FREESOUND_CLIENT_SECRET is not set.")
+        print("Copy backend\\.env.example to backend\\.env and fill in your key.")
+        return
 
     # Test API connection first
     print("\n[Auth] Testing API connection...")
