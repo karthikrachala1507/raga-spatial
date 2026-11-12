@@ -88,44 +88,160 @@ def spatialise_stem(audio_mono, azimuth_deg, distance, sofa_data, stem_sr=44100)
     return np.stack([left, right], axis=0)
 
 
+# ── Trajectory rendering (overlap-add, no gaps between blocks) ───────────────
+
+AZ_STEP_DEG = 5.0      # KEMAR horizontal resolution
+OLA_BLOCK   = 2048     # ~46 ms at 44.1 kHz
+OLA_HOP     = 1024     # 50% overlap: periodic Hann windows sum to exactly 1
+
+
+def _prepared_hrir(sofa_data, azimuth_deg, sr):
+    hrir_l, hrir_r = get_hrir_for_azimuth(sofa_data, azimuth_deg)
+    if sofa_data["sr"] != sr:
+        from scipy.signal import resample
+        target_len = int(len(hrir_l) * sr / sofa_data["sr"])
+        hrir_l = resample(hrir_l, target_len)
+        hrir_r = resample(hrir_r, target_len)
+    return hrir_l, hrir_r
+
+
+def spatialise_static(audio_mono, azimuth_deg, sofa_data, sr=44100):
+    """One HRTF convolution for a source that does not move. No gain applied."""
+    hrir_l, hrir_r = _prepared_hrir(sofa_data, azimuth_deg, sr)
+    n = len(audio_mono)
+    left  = fftconvolve(audio_mono, hrir_l, mode="full")[:n]
+    right = fftconvolve(audio_mono, hrir_r, mode="full")[:n]
+    return np.stack([left, right], axis=0).astype(np.float32)
+
+
+def spatialise_trajectory(audio_mono, azimuths, resolution_sec, sofa_data, sr=44100):
+    """
+    HRTF rendering for a source whose azimuth changes over time.
+
+    azimuths[i] is the azimuth at time i * resolution_sec. The signal is split
+    into 50%-overlapping Hann-windowed blocks; each block is convolved with the
+    HRIR of its own azimuth and the results are overlap-added with full HRIR
+    tails. The windows sum to 1, so there is no amplitude ripple between blocks
+    (the old per-chunk fade-in/fade-out produced a 10 Hz tremolo).
+    """
+    n = len(audio_mono)
+    azimuths = np.asarray(azimuths, dtype=np.float32)
+    if n == 0:
+        return np.zeros((2, 0), dtype=np.float32)
+    if len(azimuths) == 0:
+        return spatialise_static(audio_mono, 0.0, sofa_data, sr)
+
+    window   = np.hanning(OLA_BLOCK + 1)[:-1].astype(np.float32)   # periodic Hann
+    starts   = np.arange(-OLA_HOP, n, OLA_HOP)
+    centers  = (starts + OLA_BLOCK / 2) / sr
+    idx      = np.clip((centers / resolution_sec).astype(int), 0, len(azimuths) - 1)
+    block_az = (np.round(azimuths[idx] / AZ_STEP_DEG) * AZ_STEP_DEG) % 360.0
+
+    unique_az = np.unique(block_az)
+    if len(unique_az) == 1:
+        return spatialise_static(audio_mono, float(unique_az[0]), sofa_data, sr)
+
+    taps = _prepared_hrir(sofa_data, 0.0, sr)[0].shape[0]
+    out  = np.zeros((2, n + taps), dtype=np.float32)
+
+    for az in unique_az:
+        weight = np.zeros(n, dtype=np.float32)
+        for s in starts[block_az == az]:
+            a, b = max(s, 0), min(s + OLA_BLOCK, n)
+            if b > a:
+                weight[a:b] += window[a - s:b - s]
+        nz = np.flatnonzero(weight)
+        if len(nz) == 0:
+            continue
+        a, b = int(nz[0]), int(nz[-1]) + 1
+        segment = audio_mono[a:b] * weight[a:b]
+        hrir_l, hrir_r = _prepared_hrir(sofa_data, float(az), sr)
+        left  = fftconvolve(segment, hrir_l, mode="full")
+        right = fftconvolve(segment, hrir_r, mode="full")
+        out[0, a:a + len(left)]  += left
+        out[1, a:a + len(right)] += right
+
+    return out[:, :n]
+
+
+# ── Distance effects (depth layering) ────────────────────────────────────────
+
+def distance_params(distance):
+    """Gain, low-pass cutoff (Hz) and reverb mix for a distance in 0..1."""
+    d = float(min(max(distance, 0.0), 1.0))
+    return {
+        "gain":       1.0 / (1.0 + d * 4.0),
+        "cutoff_hz":  18000.0 - d * 12000.0,
+        "reverb_mix": d * 0.3,
+    }
+
+
+def apply_distance_effect(audio_mono, distance, sr=44100, lowpass=True):
+    """Dry part of the distance cue: level drop and high-frequency roll-off."""
+    p = distance_params(distance)
+    out = audio_mono
+    if lowpass and p["cutoff_hz"] < 0.45 * sr:
+        from scipy.signal import butter, sosfilt
+        sos = butter(2, p["cutoff_hz"], btype="low", fs=sr, output="sos")
+        out = sosfilt(sos, out)
+    return (out * p["gain"] * (1.0 - 0.5 * p["reverb_mix"])).astype(np.float32)
+
+
+def _room_impulse(distance, sr, seed):
+    """Synthetic stereo room tail: decaying noise, longer and later when farther."""
+    from scipy.signal import butter, sosfilt
+    d      = float(min(max(distance, 0.0), 1.0))
+    rt60   = 0.9 + 0.8 * d
+    length = int(rt60 * sr)
+    rng    = np.random.RandomState(seed)
+    t      = np.arange(length) / sr
+    tail   = rng.randn(2, length).astype(np.float32) * np.exp(-6.91 * t / rt60)
+    sos    = butter(2, [250.0, 5000.0], btype="band", fs=sr, output="sos")
+    tail   = sosfilt(sos, tail, axis=1)
+    tail  /= np.sqrt(np.sum(tail ** 2, axis=1, keepdims=True)) + 1e-9
+    delay  = int((0.012 + 0.02 * d) * sr)
+    return np.concatenate([np.zeros((2, delay), dtype=np.float32),
+                           tail.astype(np.float32)], axis=1)
+
+
+def reverb_tail(audio_mono, distance, sr=44100, seed=0):
+    """Wet part of the distance cue: a diffuse stereo tail, louder when farther."""
+    p = distance_params(distance)
+    n = len(audio_mono)
+    if p["reverb_mix"] <= 0.0 or n == 0:
+        return np.zeros((2, n), dtype=np.float32)
+    ir   = _room_impulse(distance, sr, seed)
+    left  = fftconvolve(audio_mono, ir[0], mode="full")[:n]
+    right = fftconvolve(audio_mono, ir[1], mode="full")[:n]
+    wet   = np.stack([left, right], axis=0) * p["gain"] * p["reverb_mix"]
+    return wet.astype(np.float32)
+
+
 def spatialise_stem_with_motion(audio_mono, spatial_timeline,
                                  stem_label, sofa_data, sr=44100):
-    n_samples  = len(audio_mono)
-    output     = np.zeros((2, n_samples), dtype=np.float32)
+    """2-stem pipeline: follow the label's azimuth/distance through the timeline."""
+    n_samples = len(audio_mono)
+    if len(spatial_timeline) < 2:
+        return spatialise_stem(audio_mono, 0.0, 0.5, sofa_data, sr)
     resolution = spatial_timeline[1]["time_sec"] - spatial_timeline[0]["time_sec"]
-    chunk_size = int(resolution * sr)
-    fade_size  = min(int(0.02 * sr), chunk_size // 4)
 
+    azimuths  = np.zeros(len(spatial_timeline), dtype=np.float32)
+    distances = np.full(len(spatial_timeline), 0.5, dtype=np.float32)
     for i, entry in enumerate(spatial_timeline):
-        start_sample = int(entry["time_sec"] * sr)
-        end_sample   = min(start_sample + chunk_size, n_samples)
-        if start_sample >= n_samples:
-            break
-
-        azimuth  = 0.0
-        distance = 0.5
         for instr in entry.get("instruments", []):
             if (instr.get("raw_label") == stem_label or
                     instr.get("label") == stem_label):
-                azimuth  = instr["azimuth"]
-                distance = instr["distance"]
+                azimuths[i]  = instr["azimuth"]
+                distances[i] = instr["distance"]
                 break
 
-        chunk = audio_mono[start_sample:end_sample]
-        if len(chunk) == 0:
-            continue
+    # distance gain as a smooth per-sample curve (same law as spatialise_stem)
+    gains  = 1.0 / (1.0 + distances * 3.0)
+    times  = np.arange(len(gains)) * resolution
+    gain_t = np.interp(np.arange(n_samples) / sr, times, gains).astype(np.float32)
 
-        spat = spatialise_stem(chunk, azimuth, distance, sofa_data, sr)
-
-        if fade_size > 0 and len(chunk) > fade_size * 2:
-            fade_in  = np.linspace(0.0, 1.0, fade_size)
-            fade_out = np.linspace(1.0, 0.0, fade_size)
-            spat[:, :fade_size]  *= fade_in
-            spat[:, -fade_size:] *= fade_out
-
-        output[:, start_sample:end_sample] += spat
-
-    return output
+    return spatialise_trajectory(audio_mono * gain_t, azimuths, resolution,
+                                 sofa_data, sr)
 
 
 def render_binaural(stems_dir, job_id, spatial_result, sr=44100,

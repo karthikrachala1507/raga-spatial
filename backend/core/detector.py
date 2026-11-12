@@ -180,7 +180,18 @@ def _get_label_map():
     return _LABEL_MAP
 
 
+_BEATS_MODEL = None
+
+
 def load_beats_model():
+    # Loaded once and reused: the 8-stem pipeline calls the detector per stem.
+    global _BEATS_MODEL
+    if _BEATS_MODEL is None:
+        _BEATS_MODEL = _load_beats_model()
+    return _BEATS_MODEL
+
+
+def _load_beats_model():
     if not os.path.exists(BEATS_CHECKPOINT):
         raise FileNotFoundError("BEATs checkpoint not found: " + BEATS_CHECKPOINT)
     if MODELS_DIR not in sys.path:

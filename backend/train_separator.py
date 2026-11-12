@@ -1,14 +1,27 @@
-# Raga Spatial - train_separator.py (FIXED v2)
-# Trains 8-stem BSRNN separator on synthetic mixes
-# Fixes silent-output collapse from v1:
-#   1. Loss now ignores near-empty target stems instead of unstable SDR division
-#   2. Added direct L1 + spectral magnitude loss as primary signal
-#   3. Mask decoder no longer ends in raw Tanh alone - uses Tanh * learnable gain
-#   4. Active-stem masking prevents 8-way gradient dilution from absent categories
+# Raga Spatial - train_separator.py (v2 model + loss, on-the-fly mixes)
+# Trains the 8-stem BSRNN separator.
+#
+# Model and loss are the v2 design (fixes the v1 silent-output collapse):
+#   - L1 + spectral-magnitude loss on active stems, light penalty on absent ones
+#   - learnable mask gain, pred_rms collapse monitor
+#
+# Data: mixes are built ON THE FLY from the stem-clip pools, so every training
+# example is a new combination and new datasets are picked up at the start of
+# the next epoch - no mix regeneration, no disk used for mixes.
+#   - target stems are exactly what goes into the mix (stems sum to the mix)
+#   - clips are drawn per SOURCE FILE, not per clip, so a category with a few
+#     long recordings no longer drowns out the others
+#   - 10% of source files are held out and never trained on; validation uses
+#     a fixed, seeded set of mixes built only from those held-out sources
+#
+# Run:    start_training.bat      (or: python train_separator.py)
+# Pause:  Ctrl+C                  Resume: run it again
 
 import os
 import sys
 import json
+import zlib
+import time
 import random
 import numpy as np
 import torch
@@ -16,12 +29,14 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import soundfile as sf
-import librosa
 from tqdm import tqdm
 
-# v2 mixes: target stems are at their true level in the mix (stems sum to mix).
-# Do NOT point this at the old synthetic_mixes folder - its targets are too loud.
-MIXES_DIR  = r"D:\raga-spatial-data\synthetic_mixes_v2"
+# Stem-clip pools: each has one sub-folder per category with 10 s, 16 kHz mono WAVs.
+# Tier 1 = FreeSounds + YouTube clips. Tier 2 = open datasets (prepare_datasets.py).
+POOL_DIRS = [
+    r"D:\raga-spatial-data\processed\stems",
+    r"D:\raga-spatial-data\processed\stems_t2",
+]
 MODELS_DIR = r"D:\raga-spatial-data\models"
 LOGS_DIR   = r"D:\raga-spatial-data\logs"
 
@@ -32,60 +47,168 @@ N_SAMPLES    = int(SAMPLE_RATE * DURATION)
 N_STEMS      = 8
 BATCH_SIZE   = 4
 N_EPOCHS     = 100
+MIXES_PER_EPOCH = 4500   # training mixes drawn per epoch (all freshly generated)
+N_VAL_MIXES  = 400       # fixed validation mixes from held-out sources
 LR           = 1e-3
 LR_DECAY     = 0.98
 SAVE_EVERY   = 10
-VAL_SPLIT    = 0.1
-SPLIT_SEED   = 1507     # fixed, so train/val split is identical on every resume
-MIN_TARGET_RMS = 1e-4   # below this, a target stem is considered "absent"
+SPLIT_SEED   = 1507      # fixes the validation set across runs and resumes
+VAL_HOLDOUT_MOD = 10     # 1 in 10 source files is held out for validation
+USE_AMP      = True      # mixed precision: 4.6 GB instead of 6.8 GB VRAM, ~17% faster
+NUM_WORKERS  = 2         # background processes that build mixes (0 = none)
+MIN_TARGET_RMS = 1e-4    # below this, a target stem is considered "absent"
+
+STEMS_MIN, STEMS_MAX = 2, 6        # categories per mix
+LEVEL_MIN, LEVEL_MAX = 0.21, 1.0   # level of each stem in the mix
+SECOND_CLIP_PROB     = 0.25        # chance of layering 2 sources in one category
+MAX_CLIPS_WEIGHT     = 30          # cap so very long recordings do not dominate
 
 CATEGORIES = [
     "percussion", "plucked_strings", "bowed_strings",
     "wind", "keys_synth", "vocals", "bass", "folk_texture"
 ]
 
-# ── Dataset ───────────────────────────────────────────────────────────────────
+# ── Data: clip pools and on-the-fly mixing ───────────────────────────────────
 
-class StemDataset(Dataset):
-    def __init__(self, mix_dirs):
-        self.mix_dirs = mix_dirs
+def clip_source(filename):
+    """Source-file id of a clip.
+    Tier 1: percussion_00012_003.wav        -> percussion_00012
+    Tier 2: slakh__Track00001_S03__0007.wav -> slakh__Track00001_S03"""
+    stem = os.path.splitext(filename)[0]
+    if "__" in stem:
+        return stem.rsplit("__", 1)[0]
+    return stem.rsplit("_", 1)[0]
+
+
+def is_val_source(source):
+    return zlib.crc32(source.encode("utf-8")) % VAL_HOLDOUT_MOD == 0
+
+
+class ClipPool:
+    """Index of all clips, grouped category -> source file -> clip paths."""
+
+    def __init__(self, pool_dirs):
+        self.pool_dirs = pool_dirs
+        self.train = {}
+        self.val   = {}
+        self.refresh()
+
+    def refresh(self):
+        train = {c: {} for c in CATEGORIES}
+        val   = {c: {} for c in CATEGORIES}
+        for pool_idx, root in enumerate(self.pool_dirs):
+            for cat in CATEGORIES:
+                cat_dir = os.path.join(root, cat)
+                if not os.path.isdir(cat_dir):
+                    continue
+                with os.scandir(cat_dir) as entries:
+                    for e in entries:
+                        if not e.name.endswith(".wav"):
+                            continue
+                        source = clip_source(e.name)
+                        if is_val_source(source):
+                            # held out everywhere; only pool 0 feeds the fixed val set
+                            if pool_idx == 0:
+                                val[cat].setdefault(source, []).append(e.path)
+                        else:
+                            train[cat].setdefault(source, []).append(e.path)
+        self.train = self._index(train)
+        self.val   = self._index(val)
+
+    @staticmethod
+    def _index(by_cat):
+        index = {}
+        for cat, sources in by_cat.items():
+            names = sorted(sources)
+            if not names:
+                continue
+            for n in names:
+                sources[n].sort()
+            weights = [min(len(sources[n]), MAX_CLIPS_WEIGHT) ** 0.5 for n in names]
+            index[cat] = (names, weights, sources)
+        return index
+
+    @staticmethod
+    def summary(index):
+        return {cat: len(index[cat][0]) for cat in CATEGORIES if cat in index}
+
+
+def sample_recipe(rng, index):
+    """Pick which clips go into one mix and at what level."""
+    cats = [c for c in CATEGORIES if c in index]
+    n    = rng.randint(min(STEMS_MIN, len(cats)), min(STEMS_MAX, len(cats)))
+    recipe = []
+    for cat in rng.sample(cats, n):
+        names, weights, sources = index[cat]
+        picks = 2 if (rng.random() < SECOND_CLIP_PROB and len(names) > 1) else 1
+        for source in rng.choices(names, weights=weights, k=picks):
+            path  = rng.choice(sources[source])
+            level = rng.uniform(LEVEL_MIN, LEVEL_MAX) / picks ** 0.5
+            recipe.append((CATEGORIES.index(cat), path, level))
+    return recipe
+
+
+def load_clip(path):
+    try:
+        audio, _ = sf.read(path, dtype="float32")
+    except Exception:
+        return None
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if len(audio) < N_SAMPLES:
+        audio = np.pad(audio, (0, N_SAMPLES - len(audio)))
+    return audio[:N_SAMPLES]
+
+
+def render_recipe(recipe):
+    """Build (mix, targets, active). Targets are exactly what is in the mix."""
+    targets = np.zeros((N_STEMS, N_SAMPLES), dtype=np.float32)
+    for cat_idx, path, level in recipe:
+        audio = load_clip(path)
+        if audio is not None:
+            targets[cat_idx] += audio * level
+    mix  = targets.sum(axis=0)
+    peak = max(float(np.abs(mix).max()), float(np.abs(targets).max()))
+    if peak > 0.95:                       # one scale for the mix and every stem
+        scale    = 0.95 / peak
+        mix     *= scale
+        targets *= scale
+    rms    = np.sqrt((targets ** 2).mean(axis=1))
+    active = (rms > MIN_TARGET_RMS).astype(np.float32)
+    return torch.from_numpy(mix), torch.from_numpy(targets), torch.from_numpy(active)
+
+
+class TrainMixDataset(Dataset):
+    """Every item is a brand-new random mix from the training sources."""
+
+    def __init__(self, pool, n_items):
+        self.pool    = pool
+        self.n_items = n_items
+        self.rng     = None
 
     def __len__(self):
-        return len(self.mix_dirs)
+        return self.n_items
 
     def __getitem__(self, idx):
-        mix_dir = self.mix_dirs[idx]
+        if self.rng is None:
+            # created on first use, so each DataLoader worker gets its own
+            # randomness instead of a copy of the same generator
+            self.rng = random.Random()
+        return render_recipe(sample_recipe(self.rng, self.pool.train))
 
-        mix_path = os.path.join(mix_dir, "mix.wav")
-        mix, _   = sf.read(mix_path)
-        mix      = mix.astype(np.float32)
-        if len(mix) < N_SAMPLES:
-            mix = np.pad(mix, (0, N_SAMPLES - len(mix)))
-        mix = mix[:N_SAMPLES]
 
-        targets = []
-        active  = []
-        for cat in CATEGORIES:
-            stem_path = os.path.join(mix_dir, cat + ".wav")
-            if os.path.exists(stem_path):
-                stem, _ = sf.read(stem_path)
-                stem    = stem.astype(np.float32)
-                if len(stem) < N_SAMPLES:
-                    stem = np.pad(stem, (0, N_SAMPLES - len(stem)))
-                stem = stem[:N_SAMPLES]
-            else:
-                stem = np.zeros(N_SAMPLES, dtype=np.float32)
+class ValMixDataset(Dataset):
+    """A fixed list of mixes from held-out sources (same every epoch and resume)."""
 
-            rms = float(np.sqrt(np.mean(stem ** 2)))
-            active.append(1.0 if rms > MIN_TARGET_RMS else 0.0)
-            targets.append(stem)
+    def __init__(self, pool, n_items):
+        rng = random.Random(SPLIT_SEED)
+        self.recipes = [sample_recipe(rng, pool.val) for _ in range(n_items)]
 
-        targets = np.stack(targets, axis=0)
-        active  = np.array(active, dtype=np.float32)
+    def __len__(self):
+        return len(self.recipes)
 
-        return (torch.tensor(mix),
-                torch.tensor(targets),
-                torch.tensor(active))
+    def __getitem__(self, idx):
+        return render_recipe(self.recipes[idx])
 
 
 # ── Model: BSRNN with gain-corrected mask decoder ─────────────────────────────
@@ -244,133 +367,145 @@ def masked_loss(pred, target, active, eps=1e-8):
 
 # ── Training loop ─────────────────────────────────────────────────────────────
 
+def train_step(model, batch, optimizer, scaler, use_amp):
+    """One optimisation step. Returns the loss value, or None if it was skipped."""
+    mix, targets, active = [t.to(DEVICE, non_blocking=True) for t in batch]
+    optimizer.zero_grad(set_to_none=True)
+    with torch.autocast(device_type="cuda", dtype=torch.float16,
+                        enabled=use_amp and DEVICE == "cuda"):
+        preds = model(mix)
+    loss = masked_loss(preds.float(), targets, active)
+    if not torch.isfinite(loss):
+        return None                       # skip a bad batch instead of poisoning weights
+    scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+    scaler.step(optimizer)
+    scaler.update()
+    return loss.item()
+
+
+def evaluate(model, loader, use_amp):
+    """Validation loss, overall output RMS, and output level relative to targets."""
+    model.eval()
+    losses, pred_rms_all, pred_e, tgt_e = [], [], 0.0, 0.0
+    with torch.no_grad():
+        for batch in loader:
+            mix, targets, active = [t.to(DEVICE) for t in batch]
+            with torch.autocast(device_type="cuda", dtype=torch.float16,
+                                enabled=use_amp and DEVICE == "cuda"):
+                preds = model(mix)
+            preds = preds.float()
+            losses.append(masked_loss(preds, targets, active).item())
+            pred_rms_all.append(torch.sqrt(torch.mean(preds ** 2)).item())
+            act     = active.unsqueeze(-1)
+            pred_e += (preds ** 2 * act).sum().item()
+            tgt_e  += (targets ** 2 * act).sum().item()
+    level_ratio = (pred_e / tgt_e) ** 0.5 if tgt_e > 0 else 0.0
+    return float(np.mean(losses)), float(np.mean(pred_rms_all)), level_ratio
+
+
 def train():
     os.makedirs(MODELS_DIR, exist_ok=True)
     os.makedirs(LOGS_DIR,   exist_ok=True)
 
     print("=" * 60)
-    print("Raga Spatial — 8-Stem Separator Training (FIXED v2)")
-    print("Device: " + DEVICE)
+    print("Raga Spatial - 8-Stem Separator Training (v2 model, on-the-fly mixes)")
+    print("Device: " + DEVICE + " | mixed precision: " + str(USE_AMP and DEVICE == "cuda"))
     print("=" * 60)
 
-    mix_dirs = sorted([
-        os.path.join(MIXES_DIR, d)
-        for d in os.listdir(MIXES_DIR)
-        if os.path.isdir(os.path.join(MIXES_DIR, d))
-        and os.path.exists(os.path.join(MIXES_DIR, d, "mix.wav"))
-    ])
-
-    if not mix_dirs:
-        print("ERROR: No mixes found in " + MIXES_DIR)
-        print("Run: python augment_mix.py --tier 1")
+    pool = ClipPool(POOL_DIRS)
+    if len(pool.train) < 2 or len(pool.val) < 2:
+        print("ERROR: not enough stem clips found in:")
+        for d in POOL_DIRS:
+            print("  " + d)
         return
+    print("Training sources per category:   " + str(pool.summary(pool.train)))
+    print("Validation sources per category: " + str(pool.summary(pool.val)))
 
-    print("Total mixes: " + str(len(mix_dirs)))
-
-    # Seeded shuffle of a sorted list: the same mixes land in val every run,
-    # so pausing and resuming never leaks validation mixes into training.
-    random.Random(SPLIT_SEED).shuffle(mix_dirs)
-    val_size   = max(1, int(len(mix_dirs) * VAL_SPLIT))
-    val_dirs   = mix_dirs[:val_size]
-    train_dirs = mix_dirs[val_size:]
-
-    print("Train: " + str(len(train_dirs)) + " | Val: " + str(len(val_dirs)))
-
-    train_loader = DataLoader(StemDataset(train_dirs), batch_size=BATCH_SIZE,
-                              shuffle=True,  num_workers=0, pin_memory=True)
-    val_loader   = DataLoader(StemDataset(val_dirs),   batch_size=BATCH_SIZE,
-                              shuffle=False, num_workers=0)
+    train_set = TrainMixDataset(pool, MIXES_PER_EPOCH)
+    val_set   = ValMixDataset(pool, N_VAL_MIXES)
+    # Workers build mixes while the GPU trains. They restart every epoch, which
+    # is how they see the refreshed clip pool.
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=False,
+                              num_workers=NUM_WORKERS, pin_memory=True, drop_last=True)
+    val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+    print("Mixes per epoch: " + str(MIXES_PER_EPOCH) + " (new every epoch) | "
+          "fixed validation mixes: " + str(len(val_set)))
 
     print("\nInitializing BSRNN model (v2 - gain-corrected)...")
     model = BandSplitRNN(n_stems=N_STEMS).to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
     print("Parameters: " + str(round(n_params / 1e6, 1)) + "M")
-
     if DEVICE == "cuda":
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         print("GPU VRAM: " + str(round(vram_gb, 1)) + "GB")
 
-    # NOTE: deliberately NOT resuming from old v1 checkpoint -
-    # that model converged to a silent-output collapse and is not salvageable.
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=LR_DECAY)
+    scaler    = torch.cuda.amp.GradScaler(enabled=USE_AMP and DEVICE == "cuda")
+
+    # v1 checkpoints are never loaded: that model collapsed to silence.
     checkpoint_path = os.path.join(MODELS_DIR, "separator_v2_latest.pt")
+    log_path        = os.path.join(LOGS_DIR, "training_log_v2.json")
     start_epoch     = 0
     best_val_loss   = float("inf")
+    log             = []
 
     if os.path.exists(checkpoint_path):
         print("Loading v2 checkpoint: " + checkpoint_path)
         ckpt = torch.load(checkpoint_path, map_location=DEVICE)
         model.load_state_dict(ckpt["model"])
-        start_epoch   = ckpt["epoch"] + 1
-        best_val_loss = ckpt.get("best_val_loss", float("inf"))
-        print("Resuming v2 from epoch " + str(start_epoch))
-    else:
-        print("Starting fresh v2 training (old v1 checkpoints discarded - "
-              "they converged to silent collapse)")
-
-    optimizer = optim.Adam(model.parameters(), lr=LR)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=LR_DECAY)
-
-    if os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location=DEVICE)
         if "optimizer" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer"])
-
-    # Keep earlier epochs in the log when resuming (v1 lost epochs 1-71 this way)
-    log_path = os.path.join(LOGS_DIR, "training_log_v2.json")
-    log = []
-    if start_epoch > 0 and os.path.exists(log_path):
-        try:
-            with open(log_path) as f:
-                log = [e for e in json.load(f) if e.get("epoch", 0) <= start_epoch]
-            print("Loaded " + str(len(log)) + " earlier epochs from the log")
-        except (ValueError, OSError):
-            print("WARNING: could not read existing log, starting a new one")
+        if "scaler" in ckpt and USE_AMP:
+            scaler.load_state_dict(ckpt["scaler"])
+        start_epoch   = ckpt["epoch"] + 1
+        best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        del ckpt
+        # Keep earlier epochs in the log when resuming (v1 lost epochs 1-71 this way)
+        if os.path.exists(log_path):
+            try:
+                with open(log_path) as f:
+                    log = [e for e in json.load(f) if e.get("epoch", 0) <= start_epoch]
+            except (ValueError, OSError):
+                print("WARNING: could not read existing log, starting a new one")
+        print("Resuming v2 from epoch " + str(start_epoch + 1)
+              + " (" + str(len(log)) + " earlier epochs in the log)")
+    else:
+        print("Starting fresh v2 training")
 
     print("\nStarting training...")
     print("Batch size: " + str(BATCH_SIZE) + " | Epochs: " + str(N_EPOCHS))
     print("-" * 60)
 
     for epoch in range(start_epoch, N_EPOCHS):
+        t_epoch = time.time()
+        if epoch > start_epoch:
+            pool.refresh()                # pick up clips added since the last epoch
+        n_sources = sum(pool.summary(pool.train).values())
+
         model.train()
-        train_losses = []
+        train_losses, skipped = [], 0
+        for batch in tqdm(train_loader,
+                          desc="Epoch " + str(epoch+1) + "/" + str(N_EPOCHS),
+                          leave=False):
+            loss = train_step(model, batch, optimizer, scaler, USE_AMP)
+            if loss is None:
+                skipped += 1
+            else:
+                train_losses.append(loss)
 
-        for mix, targets, active in tqdm(train_loader,
-                                  desc="Epoch " + str(epoch+1) + "/" + str(N_EPOCHS),
-                                  leave=False):
-            mix     = mix.to(DEVICE)
-            targets = targets.to(DEVICE)
-            active  = active.to(DEVICE)
+        if not train_losses:
+            print("ERROR: every batch produced a non-finite loss. Stopping.")
+            return
+        train_loss = float(np.mean(train_losses))
 
-            optimizer.zero_grad()
-            preds = model(mix)
-            loss  = masked_loss(preds, targets, active)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            optimizer.step()
-            train_losses.append(loss.item())
-
-        train_loss = np.mean(train_losses)
-
-        model.eval()
-        val_losses = []
-        # Track avg output RMS to catch collapse early
-        avg_pred_rms = []
-
-        with torch.no_grad():
-            for mix, targets, active in val_loader:
-                mix     = mix.to(DEVICE)
-                targets = targets.to(DEVICE)
-                active  = active.to(DEVICE)
-                preds   = model(mix)
-                loss    = masked_loss(preds, targets, active)
-                val_losses.append(loss.item())
-                avg_pred_rms.append(torch.sqrt(torch.mean(preds**2)).item())
-
-        val_loss = np.mean(val_losses)
-        pred_rms = np.mean(avg_pred_rms)
+        val_loss, pred_rms, level_ratio = evaluate(model, val_loader, USE_AMP)
         scheduler.step()
 
-        lr_now = optimizer.param_groups[0]["lr"]
+        lr_now  = optimizer.param_groups[0]["lr"]
+        minutes = (time.time() - t_epoch) / 60
         collapse_warning = "  <-- WARNING: low output energy, possible collapse" \
                             if pred_rms < 0.01 else ""
 
@@ -378,15 +513,22 @@ def train():
               + " | train: " + str(round(train_loss, 4)).rjust(8)
               + " | val: "   + str(round(val_loss,   4)).rjust(8)
               + " | pred_rms: " + str(round(pred_rms, 5)).rjust(8)
+              + " | level: " + str(round(level_ratio, 2)).rjust(5)
               + " | lr: "    + str(round(lr_now, 6))
+              + " | " + str(round(minutes)) + " min"
+              + (" | skipped " + str(skipped) if skipped else "")
               + collapse_warning)
 
         log.append({
             "epoch": epoch+1,
-            "train_loss": round(float(train_loss), 4),
-            "val_loss":   round(float(val_loss),   4),
-            "pred_rms":   round(float(pred_rms), 6),
-            "lr":         round(float(lr_now), 6),
+            "train_loss":  round(train_loss, 4),
+            "val_loss":    round(val_loss,   4),
+            "pred_rms":    round(pred_rms, 6),
+            "level_ratio": round(level_ratio, 3),
+            "lr":          round(float(lr_now), 6),
+            "minutes":     round(minutes, 1),
+            "train_sources": n_sources,
+            "skipped_batches": skipped,
         })
         with open(log_path, "w") as f:
             json.dump(log, f, indent=2)
@@ -400,11 +542,13 @@ def train():
             "epoch":         epoch,
             "model":         model.state_dict(),
             "optimizer":     optimizer.state_dict(),
+            "scaler":        scaler.state_dict(),
             "train_loss":    train_loss,
             "val_loss":      val_loss,
             "best_val_loss": best_val_loss,
             "categories":    CATEGORIES,
-        }, checkpoint_path)
+        }, checkpoint_path + ".tmp")
+        os.replace(checkpoint_path + ".tmp", checkpoint_path)   # never a half-written file
 
         if is_best:
             torch.save({

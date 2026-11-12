@@ -28,6 +28,25 @@ JOBS = {}
 JOBS_LOCK = threading.Lock()
 
 
+STEM_NAMES = ("vocals", "instrumental", "percussion", "plucked_strings",
+              "bowed_strings", "wind", "keys_synth", "bass", "folk_texture")
+
+
+def _job_id_ok(job_id):
+    return job_id.replace("-", "").isalnum() and len(job_id) <= 40
+
+
+def _is_complete(job_id):
+    """Complete in memory, or finished in an earlier server run (JSON on disk)."""
+    if not _job_id_ok(job_id):
+        return False
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+    if job is not None:
+        return job["status"] == "complete"
+    return os.path.exists(os.path.join(JSON_DIR, job_id + "_output.json"))
+
+
 def _update_job(job_id, **kwargs):
     with JOBS_LOCK:
         if job_id in JOBS:
@@ -169,6 +188,10 @@ async def get_result(job_id: str):
         job = JOBS.get(job_id)
 
     if job is None:
+        disk_json = os.path.join(JSON_DIR, job_id + "_output.json")
+        if _job_id_ok(job_id) and os.path.exists(disk_json):
+            with open(disk_json) as f:
+                return JSONResponse(json.load(f))
         raise HTTPException(status_code=404,
             detail="Job not found: " + job_id)
 
@@ -213,26 +236,13 @@ async def get_result(job_id: str):
 async def download_spatial(job_id: str):
     """
     Download the spatial WAV output for a completed job.
-    This is the binaural audio — listen with headphones.
+    This is the binaural audio - listen with headphones.
     """
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-
-    if job is None:
+    if not _is_complete(job_id):
         raise HTTPException(status_code=404,
-            detail="Job not found: " + job_id)
+            detail="No completed job: " + job_id)
 
-    if job["status"] != "complete":
-        raise HTTPException(status_code=409,
-            detail="Job not complete yet. Status: " + job["status"])
-
-    result    = job.get("result", {})
-    wav_path  = result.get("spatial_wav") if result else None
-
-    if not wav_path or not os.path.exists(wav_path):
-        # Try to find it by convention
-        wav_path = os.path.join(SPATIAL_DIR, job_id + "_spatial.wav")
-
+    wav_path = os.path.join(SPATIAL_DIR, job_id + "_spatial.wav")
     if not os.path.exists(wav_path):
         raise HTTPException(status_code=404,
             detail="Spatial WAV not found for job: " + job_id)
@@ -249,23 +259,15 @@ async def download_spatial(job_id: str):
 @router.get("/download/{job_id}/stems/{stem_name}")
 async def download_stem(job_id: str, stem_name: str):
     """
-    Download a separated stem (vocals or instrumental).
-    stem_name: "vocals" or "instrumental"
+    Download a separated stem (dry, not spatialised).
+    stem_name: one of the 8 categories, or "vocals" / "instrumental" (2-stem).
     """
-    if stem_name not in ("vocals", "instrumental"):
+    if stem_name not in STEM_NAMES:
         raise HTTPException(status_code=400,
-            detail="stem_name must be 'vocals' or 'instrumental'")
-
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-
-    if job is None:
+            detail="stem_name must be one of: " + ", ".join(STEM_NAMES))
+    if not _is_complete(job_id):
         raise HTTPException(status_code=404,
-            detail="Job not found: " + job_id)
-
-    if job["status"] != "complete":
-        raise HTTPException(status_code=409,
-            detail="Job not complete yet. Status: " + job["status"])
+            detail="No completed job: " + job_id)
 
     stem_path = os.path.join(STEMS_DIR, job_id + "_" + stem_name + ".wav")
     if not os.path.exists(stem_path):
@@ -277,6 +279,32 @@ async def download_stem(job_id: str, stem_name: str):
         media_type = "audio/wav",
         filename   = job_id + "_" + stem_name + ".wav",
     )
+
+
+@router.get("/stem/{job_id}/{stem_name}")
+async def binaural_stem(job_id: str, stem_name: str):
+    """
+    One stem already placed in space (binaural MP3). The UI loads all of them
+    and mixes them live, which is what makes volume / mute / solo instant.
+    """
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=400, detail="Unknown stem: " + stem_name)
+    if not _is_complete(job_id):
+        raise HTTPException(status_code=404,
+            detail="No completed job: " + job_id)
+
+    path = os.path.join(SPATIAL_DIR, job_id + "_" + stem_name + "_binaural.mp3")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404,
+            detail="No binaural stem: " + stem_name)
+    return FileResponse(path=path, media_type="audio/mpeg")
+
+
+@router.get("/mode")
+async def separator_mode():
+    """Which separation the next upload will use (8-stem or 2-stem)."""
+    from core.renderer import get_separator_mode
+    return JSONResponse(get_separator_mode())
 
 
 @router.get("/jobs")
@@ -309,16 +337,15 @@ async def delete_job(job_id: str):
         raise HTTPException(status_code=404,
             detail="Job not found: " + job_id)
 
-    # Clean up files
+    # Clean up files (every stem, binaural stem, mix and JSON of this job)
     files_deleted = []
-    for path in [
-        job.get("audio_path"),
-        os.path.join(SPATIAL_DIR, job_id + "_spatial.wav"),
-        os.path.join(STEMS_DIR,   job_id + "_vocals.wav"),
-        os.path.join(STEMS_DIR,   job_id + "_instrumental.wav"),
-        os.path.join(JSON_DIR,    job_id + "_output.json"),
-    ]:
-        if path and os.path.exists(path):
+    paths = [job.get("audio_path")]
+    for folder in (SPATIAL_DIR, STEMS_DIR, JSON_DIR):
+        for name in os.listdir(folder):
+            if name.startswith(job_id + "_"):
+                paths.append(os.path.join(folder, name))
+    for path in paths:
+        if path and os.path.isfile(path):
             os.remove(path)
             files_deleted.append(path)
 

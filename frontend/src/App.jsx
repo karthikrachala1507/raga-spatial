@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react"
 import axios from "axios"
 import "./App.css"
+import Stems8View from "./Stems8"
 
 const API = "http://localhost:8000/api"
 
@@ -198,15 +199,28 @@ export default function App() {
     }, 2000)
   }
 
+  // ── Reopen a finished job from the address bar (?job=<id>) ────────────────
+  useEffect(() => {
+    const jid = new URLSearchParams(window.location.search).get("job")
+    if (jid) {
+      setJobId(jid); setStatus("complete"); setProgress(100)
+      fetchResult(jid)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Fetch full result ─────────────────────────────────────────────────────
   const fetchResult = async (jid) => {
     try {
       const res = await axios.get(API + "/result/" + jid)
       setResult(res.data)
+      // keep the job in the address bar so a page reload shows it again
+      window.history.replaceState(null, "", "?job=" + jid)
       if (res.data.spatial_timeline && res.data.spatial_timeline.length > 0) {
         setInstruments(res.data.spatial_timeline[0].instruments || [])
       }
     } catch (err) {
+      setStatus("error")
       setMessage("Could not load result: " + err.message)
     }
   }
@@ -240,6 +254,7 @@ export default function App() {
     setFile(null); setJobId(null); setStatus("idle")
     setProgress(0); setMessage(""); setResult(null)
     setCurrentTime(0); setInstruments([])
+    window.history.replaceState(null, "", window.location.pathname)
   }
 
   // ── Step labels ───────────────────────────────────────────────────────────
@@ -344,9 +359,39 @@ export default function App() {
                 <span className="info-label">Dominant instrument</span>
                 <span className="info-val">{result.motion_summary?.dominant_instrument}</span>
               </div>
+              <div className="info-item">
+                <span className="info-label">Stems</span>
+                <span className="info-val">
+                  {result.mode === "8-stem"
+                    ? result.stems8.filter((s) => s.active).length + " of 8 active"
+                    : "2 (vocals + instrumental)"}
+                </span>
+              </div>
             </div>
 
-            {/* Main panels */}
+            {/* 8-stem mode: zones with depth layers + live stem mixer */}
+            {result.mode === "8-stem" && (
+              <>
+                <Stems8View api={API} jobId={jobId} result={result}
+                  onTime={setCurrentTime} />
+                {result.motion_events?.length > 0 && (
+                  <div className="panel">
+                    <div className="panel-title">Motion events</div>
+                    {result.motion_events.map((ev, i) => (
+                      <div key={i} className="motion-row">
+                        <div className="motion-time">{ev.start_sec}s – {ev.end_sec}s</div>
+                        <div className="motion-type">{ev.type}</div>
+                        <div className="motion-dir">{ev.spatial_motion.replaceAll("_", " ")}</div>
+                        <div className="motion-instr">{ev.dominant_instrument}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 2-stem mode: main panels */}
+            {result.mode !== "8-stem" && (
             <div className="panels">
               {/* Left: spatial map */}
               <div className="panel">
@@ -374,19 +419,22 @@ export default function App() {
                 ))}
               </div>
             </div>
+            )}
 
             {/* Timeline */}
             <TimelineBar motionEvents={result.motion_events}
               duration={result.duration_sec}
               currentTime={currentTime} />
 
-            {/* Audio player */}
+            {/* Audio player (2-stem mode; the 8-stem view has its own transport) */}
+            {result.mode !== "8-stem" && (
             <div className="audio-section">
               <div className="panel-title">Spatial audio output</div>
               <div className="audio-sub">🎧 Listen with headphones for full spatial effect</div>
               <audio ref={audioRef} controls className="audio-player"
                 src={API + "/download/" + jobId} />
             </div>
+            )}
 
             {/* Actions */}
             <div className="actions">
