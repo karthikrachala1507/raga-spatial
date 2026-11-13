@@ -301,6 +301,16 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
         motion_events.extend(events)
     motion_events.sort(key=lambda ev: ev["start_sec"])
     motion_summary = summarise_motion(motion_events, duration_sec)
+    # two stems can move at once: count the time when anything moves, once
+    covered, last_end = 0.0, 0.0
+    for ev in motion_events:
+        start = max(ev["start_sec"], last_end)
+        if ev["end_sec"] > start:
+            covered += ev["end_sec"] - start
+            last_end = ev["end_sec"]
+    if motion_events:
+        motion_summary["motion_coverage_pct"] = round(
+            min(covered / max(duration_sec, 1e-6), 1.0) * 100, 1)
     _progress(4, "Motion done: " + str(len(motion_events)) + " events ["
               + str(round(time.time()-t, 1)) + "s]")
 
