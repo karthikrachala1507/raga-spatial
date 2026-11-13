@@ -1,9 +1,12 @@
-# Raga Spatial - train_separator.py (v2 model + loss, on-the-fly mixes)
-# Trains the 8-stem BSRNN separator.
+# Raga Spatial - train_separator.py (v3: standard band-split RNN)
+# Trains the 8-stem separator.
 #
-# Model and loss are the v2 design (fixes the v1 silent-output collapse):
-#   - L1 + spectral-magnitude loss on active stems, light penalty on absent ones
-#   - learnable mask gain, pred_rms collapse monitor
+# History: v1 collapsed to silence (its SDR loss rewarded silence). v2 fixed
+# the loss but its model learned only bass in 4 epochs. v3 keeps the v2 loss
+# and data pipeline and replaces the model with the standard band-split RNN,
+# which in an 11-minute trial beat 5 hours of the v2 model on every stem.
+#
+# Loss: L1 + spectral-magnitude loss on active stems, light penalty on absent ones.
 #
 # Data: mixes are built ON THE FLY from the stem-clip pools, so every training
 # example is a new combination and new datasets are picked up at the start of
@@ -13,6 +16,7 @@
 #     long recordings no longer drowns out the others
 #   - 10% of source files are held out and never trained on; validation uses
 #     a fixed, seeded set of mixes built only from those held-out sources
+#   - "best" is chosen by separation quality in dB (val_sdr), not by the loss
 #
 # Run:    start_training.bat      (or: python train_separator.py)
 # Pause:  Ctrl+C                  Resume: run it again
@@ -47,15 +51,23 @@ N_SAMPLES    = int(SAMPLE_RATE * DURATION)
 N_STEMS      = 8
 BATCH_SIZE   = 4
 N_EPOCHS     = 100
-MIXES_PER_EPOCH = 4500   # training mixes drawn per epoch (all freshly generated)
-N_VAL_MIXES  = 400       # fixed validation mixes from held-out sources
+MIXES_PER_EPOCH = 12000  # training mixes drawn per epoch (all freshly generated)
+N_VAL_MIXES  = 300       # fixed validation mixes from held-out sources
+N_SDR_MIXES  = 80        # of those, how many are scored in dB each epoch
+FEATURE_DIM  = 112       # width of each band's feature vector
+N_BLOCKS     = 8         # time/band LSTM blocks
+CROP_SECONDS = 6.0       # each training step sees a random 6 s window of a 10 s mix
 LR           = 1e-3
 LR_DECAY     = 0.98
 SAVE_EVERY   = 10
 SPLIT_SEED   = 1507      # fixes the validation set across runs and resumes
 VAL_HOLDOUT_MOD = 10     # 1 in 10 source files is held out for validation
-USE_AMP      = True      # mixed precision: 4.6 GB instead of 6.8 GB VRAM, ~17% faster
-NUM_WORKERS  = 2         # background processes that build mixes (0 = none)
+USE_AMP      = True      # mixed precision: about half the GPU memory
+NUM_WORKERS  = 4         # background processes that build mixes (0 = none)
+# Tier 2 sources with these prefixes are still being added, so they are kept
+# out of the validation set to keep it identical from run to run.
+VAL_EXCLUDE_PREFIXES = ("slakh2100__",)
+CHECKPOINT_NAME = "separator_v3"
 MIN_TARGET_RMS = 1e-4    # below this, a target stem is considered "absent"
 
 STEMS_MIN, STEMS_MAX = 2, 6        # categories per mix
@@ -107,8 +119,9 @@ class ClipPool:
                             continue
                         source = clip_source(e.name)
                         if is_val_source(source):
-                            # held out everywhere; only pool 0 feeds the fixed val set
-                            if pool_idx == 0:
+                            # held out everywhere; datasets still growing stay
+                            # out of the fixed validation set
+                            if not source.startswith(VAL_EXCLUDE_PREFIXES):
                                 val[cat].setdefault(source, []).append(e.path)
                         else:
                             train[cat].setdefault(source, []).append(e.path)
@@ -211,118 +224,121 @@ class ValMixDataset(Dataset):
         return render_recipe(self.recipes[idx])
 
 
-# ── Model: BSRNN with gain-corrected mask decoder ─────────────────────────────
+# ── Model: band-split RNN (BSRNN) ─────────────────────────────────────────────
+#
+# Standard band-split design (Luo & Yu, 2022), sized for a 6 GB GPU:
+#   1. the spectrogram is cut into 40 bands, narrow at low frequencies and wide
+#      at high ones; each band is normalised and projected to FEATURE_DIM numbers
+#   2. a stack of blocks alternates an LSTM along TIME (how each band evolves)
+#      with an LSTM across BANDS (how the bands relate at one moment, which is
+#      what tells a flute from a violin)
+#   3. every band keeps its own feature vector to the end and predicts its own
+#      complex mask for each of the 8 stems
+#
+# The earlier model squeezed all 513 bins x 8 stems of every frame through one
+# 1024-number vector and was not separating after 4 epochs (about 0 dB). This
+# one has ~20x fewer parameters and no such bottleneck.
+
+BAND_LAYOUT = [(4, 16), (8, 8), (16, 8), (32, 8)]    # (bins per band, number of bands) = 40 bands
+
+
+def band_edges(freq_bins):
+    edges, start = [], 0
+    for width, count in BAND_LAYOUT:
+        for _ in range(count):
+            edges.append((start, start + width))
+            start += width
+    edges[-1] = (edges[-1][0], freq_bins)              # last band takes the top bin
+    return edges
+
+
+class _RNNBlock(nn.Module):
+    """Normalise, run a bidirectional LSTM along one axis, add back (residual)."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.norm = nn.GroupNorm(1, dim)
+        self.rnn  = nn.LSTM(dim, dim, batch_first=True, bidirectional=True)
+        self.fc   = nn.Linear(dim * 2, dim)
+
+    def forward(self, x):                              # (sequences, length, dim)
+        y = self.norm(x.transpose(1, 2)).transpose(1, 2)
+        y, _ = self.rnn(y)
+        return x + self.fc(y)
+
+
+class _DualBlock(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.along_time  = _RNNBlock(dim)
+        self.along_bands = _RNNBlock(dim)
+
+    def forward(self, h):                              # (batch, bands, frames, dim)
+        b, k, t, n = h.shape
+        h = self.along_time(h.reshape(b * k, t, n)).reshape(b, k, t, n)
+        h = h.transpose(1, 2)                          # (batch, frames, bands, dim)
+        h = self.along_bands(h.reshape(b * t, k, n)).reshape(b, t, k, n)
+        return h.transpose(1, 2)
+
 
 class BandSplitRNN(nn.Module):
-    def __init__(self, n_stems=8, n_fft=1024, hop=256,
-                 n_bands=64, hidden_dim=128, n_layers=3):
+    def __init__(self, n_stems=8, n_fft=1024, hop=256, feature_dim=96, n_blocks=8):
         super().__init__()
-        self.n_stems    = n_stems
-        self.n_fft      = n_fft
-        self.hop        = hop
-        self.n_bands    = n_bands
-        self.hidden_dim = hidden_dim
-        self.freq_bins  = n_fft // 2 + 1
-        self.band_size  = self.freq_bins // n_bands + 1
+        self.n_stems   = n_stems
+        self.n_fft     = n_fft
+        self.hop       = hop
+        self.freq_bins = n_fft // 2 + 1
+        self.bands     = band_edges(self.freq_bins)
+        widths         = [e - s for s, e in self.bands]
 
-        self.band_rnn = nn.ModuleList([
-            nn.LSTM(
-                input_size   = self.band_size * 2,
-                hidden_size  = hidden_dim,
-                num_layers   = n_layers,
-                batch_first  = True,
-                bidirectional= True,
-                dropout      = 0.1 if n_layers > 1 else 0,
-            )
-            for _ in range(n_bands)
-        ])
-
-        self.global_rnn = nn.LSTM(
-            input_size   = n_bands * hidden_dim * 2,
-            hidden_size  = hidden_dim * 4,
-            num_layers   = 2,
-            batch_first  = True,
-            bidirectional= True,
-            dropout      = 0.1,
-        )
-
-        # Mask decoder: linear -> linear (NO final Tanh squeeze to near-0).
-        # We apply Tanh ourselves after a learnable scale so the model can't
-        # collapse masks toward 0 just by shrinking the last linear layer's
-        # weights uniformly - the gain is a free parameter that pushes back.
-        self.mask_decoder = nn.ModuleList([
+        self.split_norm = nn.ModuleList([nn.GroupNorm(1, 2 * w) for w in widths])
+        self.split_fc   = nn.ModuleList([nn.Linear(2 * w, feature_dim) for w in widths])
+        self.blocks     = nn.ModuleList([_DualBlock(feature_dim) for _ in range(n_blocks)])
+        self.mask_norm  = nn.ModuleList([nn.GroupNorm(1, feature_dim) for _ in widths])
+        self.mask_mlp   = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim * 8, hidden_dim * 4),
-                nn.ReLU(),
-                nn.Linear(hidden_dim * 4, self.freq_bins * 2),
+                nn.Linear(feature_dim, feature_dim * 4),
+                nn.Tanh(),
+                nn.Linear(feature_dim * 4, 2 * w * n_stems),
             )
-            for _ in range(n_stems)
+            for w in widths
         ])
-        # Learnable per-stem gain, initialized at 1.0 (not 0) so masks
-        # start in a usable [-1,1]-ish range from epoch 1, not collapsed.
-        self.mask_gain = nn.Parameter(torch.ones(n_stems))
 
-    def forward(self, x):
-        batch = x.shape[0]
+    def forward(self, x):                              # (batch, samples)
+        n_samples = x.shape[-1]
+        device_type = "cuda" if x.is_cuda else "cpu"
 
-        window = torch.hann_window(self.n_fft).to(x.device)
-        stft   = torch.stft(x, self.n_fft, self.hop,
-                            window=window, return_complex=True)
-        freq_bins   = stft.shape[1]
+        # Band split in full precision: raw spectrogram values are too large
+        # for half-precision normalisation.
+        with torch.autocast(device_type=device_type, enabled=False):
+            x      = x.float()
+            window = torch.hann_window(self.n_fft, device=x.device)
+            stft   = torch.stft(x, self.n_fft, self.hop, window=window, return_complex=True)
+            feats  = []
+            for i, (s, e) in enumerate(self.bands):
+                band = torch.cat([stft.real[:, s:e], stft.imag[:, s:e]], dim=1)   # (b, 2w, t)
+                band = self.split_norm[i](band).transpose(1, 2)                   # (b, t, 2w)
+                feats.append(self.split_fc[i](band))                              # (b, t, dim)
+            h = torch.stack(feats, dim=1)                                         # (b, k, t, dim)
 
-        stft_real = stft.real
-        stft_imag = stft.imag
+        for block in self.blocks:
+            h = block(h)
 
-        band_outputs = []
-        for b in range(self.n_bands):
-            f_start = b * (freq_bins // self.n_bands)
-            f_end   = min(f_start + self.band_size, freq_bins)
-            actual  = f_end - f_start
-            pad     = self.band_size - actual
+        batch, _, frames, _ = h.shape
+        masks = []
+        for i, (s, e) in enumerate(self.bands):
+            m = self.mask_norm[i](h[:, i].transpose(1, 2)).transpose(1, 2)
+            m = self.mask_mlp[i](m)                                               # (b, t, 2*w*stems)
+            m = m.reshape(batch, frames, self.n_stems, 2, e - s)
+            masks.append(m.permute(0, 2, 4, 1, 3))                                # (b, stems, w, t, 2)
+        mask = torch.cat(masks, dim=2).float()                                    # (b, stems, bins, t, 2)
 
-            band_r = stft_real[:, f_start:f_end, :]
-            band_i = stft_imag[:, f_start:f_end, :]
-
-            if pad > 0:
-                band_r = torch.nn.functional.pad(band_r, (0, 0, 0, pad))
-                band_i = torch.nn.functional.pad(band_i, (0, 0, 0, pad))
-
-            band_feat = torch.cat([band_r, band_i], dim=1)
-            band_feat = band_feat.permute(0, 2, 1)
-
-            out, _ = self.band_rnn[b](band_feat)
-            band_outputs.append(out)
-
-        global_feat   = torch.cat(band_outputs, dim=-1)
-        global_out, _ = self.global_rnn(global_feat)
-
-        stems_stft = []
-        for s in range(self.n_stems):
-            mask_flat = self.mask_decoder[s](global_out)
-            # Apply learnable gain BEFORE tanh so the model can scale
-            # its own dynamic range instead of being stuck near zero.
-            mask_flat = torch.tanh(mask_flat * self.mask_gain[s])
-
-            mask_r = mask_flat[:, :, :freq_bins].permute(0, 2, 1)
-            mask_i = mask_flat[:, :, freq_bins:].permute(0, 2, 1)
-            mask_r = mask_r[:, :freq_bins, :]
-            mask_i = mask_i[:, :freq_bins, :]
-
-            stem_r = stft_real * mask_r - stft_imag * mask_i
-            stem_i = stft_real * mask_i + stft_imag * mask_r
-
-            stem_stft = torch.complex(stem_r, stem_i)
-            stems_stft.append(stem_stft)
-
-        stems_audio = []
-        for s in range(self.n_stems):
-            audio = torch.istft(
-                stems_stft[s], self.n_fft, self.hop,
-                window=window, length=x.shape[-1]
-            )
-            stems_audio.append(audio)
-
-        return torch.stack(stems_audio, dim=1)
+        with torch.autocast(device_type=device_type, enabled=False):
+            mask = torch.complex(mask[..., 0], mask[..., 1])
+            est  = mask * stft[:, None]                                           # (b, stems, bins, t)
+            audio = torch.istft(est.reshape(batch * self.n_stems, self.freq_bins, frames),
+                                self.n_fft, self.hop, window=window, length=n_samples)
+        return audio.reshape(batch, self.n_stems, n_samples)
 
 
 # ── Loss function (FIXED) ──────────────────────────────────────────────────────
@@ -370,6 +386,12 @@ def masked_loss(pred, target, active, eps=1e-8):
 def train_step(model, batch, optimizer, scaler, use_amp):
     """One optimisation step. Returns the loss value, or None if it was skipped."""
     mix, targets, active = [t.to(DEVICE, non_blocking=True) for t in batch]
+    crop = int(CROP_SECONDS * SAMPLE_RATE)
+    if crop < mix.shape[-1]:
+        start   = random.randint(0, mix.shape[-1] - crop)
+        mix     = mix[:, start:start + crop]
+        targets = targets[:, :, start:start + crop]
+        active  = (targets.pow(2).mean(dim=-1).sqrt() > MIN_TARGET_RMS).float()
     optimizer.zero_grad(set_to_none=True)
     with torch.autocast(device_type="cuda", dtype=torch.float16,
                         enabled=use_amp and DEVICE == "cuda"):
@@ -385,10 +407,30 @@ def train_step(model, batch, optimizer, scaler, use_amp):
     return loss.item()
 
 
+def _sdr_db(target, estimate):
+    noise = target - estimate
+    return 10.0 * torch.log10((target.pow(2).sum() + 1e-10) / (noise.pow(2).sum() + 1e-10))
+
+
+def stem_sdrs(mix, preds, targets, active):
+    """SDR per active stem, scored the way the app uses the model: its outputs
+    become soft masks (summing to 1) on the mix. 0 dB = no better than silence."""
+    window = torch.hann_window(1024, device=mix.device)
+    mix_tf = torch.stft(mix, 1024, 256, window=window, return_complex=True)
+    power  = torch.stft(preds, 1024, 256, window=window, return_complex=True).abs() ** 2
+    masks  = power / (power.sum(dim=0, keepdim=True) + 1e-10)
+    est    = torch.istft(mix_tf[None] * masks, 1024, 256, window=window,
+                         length=mix.shape[-1])
+    return {s: float(_sdr_db(targets[s], est[s]))
+            for s in range(preds.shape[0]) if active[s] > 0.5}
+
+
 def evaluate(model, loader, use_amp):
-    """Validation loss, overall output RMS, and output level relative to targets."""
+    """Validation loss, output RMS, output level relative to targets, and
+    separation quality in dB (overall median and per category)."""
     model.eval()
     losses, pred_rms_all, pred_e, tgt_e = [], [], 0.0, 0.0
+    sdrs, scored = {c: [] for c in CATEGORIES}, 0
     with torch.no_grad():
         for batch in loader:
             mix, targets, active = [t.to(DEVICE) for t in batch]
@@ -401,8 +443,16 @@ def evaluate(model, loader, use_amp):
             act     = active.unsqueeze(-1)
             pred_e += (preds ** 2 * act).sum().item()
             tgt_e  += (targets ** 2 * act).sum().item()
+            for b in range(mix.shape[0]):
+                if scored < N_SDR_MIXES:
+                    for s, v in stem_sdrs(mix[b], preds[b], targets[b], active[b]).items():
+                        sdrs[CATEGORIES[s]].append(v)
+                    scored += 1
     level_ratio = (pred_e / tgt_e) ** 0.5 if tgt_e > 0 else 0.0
-    return float(np.mean(losses)), float(np.mean(pred_rms_all)), level_ratio
+    per_cat = {c: round(float(np.median(v)), 2) for c, v in sdrs.items() if v}
+    all_sdr = [x for v in sdrs.values() for x in v]
+    val_sdr = float(np.median(all_sdr)) if all_sdr else 0.0
+    return float(np.mean(losses)), float(np.mean(pred_rms_all)), level_ratio, val_sdr, per_cat
 
 
 def train():
@@ -410,7 +460,7 @@ def train():
     os.makedirs(LOGS_DIR,   exist_ok=True)
 
     print("=" * 60)
-    print("Raga Spatial - 8-Stem Separator Training (v2 model, on-the-fly mixes)")
+    print("Raga Spatial - 8-Stem Separator Training (v3 band-split RNN)")
     print("Device: " + DEVICE + " | mixed precision: " + str(USE_AMP and DEVICE == "cuda"))
     print("=" * 60)
 
@@ -433,8 +483,10 @@ def train():
     print("Mixes per epoch: " + str(MIXES_PER_EPOCH) + " (new every epoch) | "
           "fixed validation mixes: " + str(len(val_set)))
 
-    print("\nInitializing BSRNN model (v2 - gain-corrected)...")
-    model = BandSplitRNN(n_stems=N_STEMS).to(DEVICE)
+    print("\nInitializing band-split RNN (dim " + str(FEATURE_DIM)
+          + ", " + str(N_BLOCKS) + " blocks)...")
+    model = BandSplitRNN(n_stems=N_STEMS, feature_dim=FEATURE_DIM,
+                         n_blocks=N_BLOCKS).to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
     print("Parameters: " + str(round(n_params / 1e6, 1)) + "M")
     if DEVICE == "cuda":
@@ -445,15 +497,17 @@ def train():
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=LR_DECAY)
     scaler    = torch.cuda.amp.GradScaler(enabled=USE_AMP and DEVICE == "cuda")
 
-    # v1 checkpoints are never loaded: that model collapsed to silence.
-    checkpoint_path = os.path.join(MODELS_DIR, "separator_v2_latest.pt")
-    log_path        = os.path.join(LOGS_DIR, "training_log_v2.json")
+    # v1 / v2 checkpoints are a different model and are never loaded.
+    model_config    = {"feature_dim": FEATURE_DIM, "n_blocks": N_BLOCKS}
+    checkpoint_path = os.path.join(MODELS_DIR, CHECKPOINT_NAME + "_latest.pt")
+    best_path       = os.path.join(MODELS_DIR, CHECKPOINT_NAME + "_best.pt")
+    log_path        = os.path.join(LOGS_DIR, "training_log_v3.json")
     start_epoch     = 0
-    best_val_loss   = float("inf")
+    best_val_sdr    = float("-inf")
     log             = []
 
     if os.path.exists(checkpoint_path):
-        print("Loading v2 checkpoint: " + checkpoint_path)
+        print("Loading checkpoint: " + checkpoint_path)
         ckpt = torch.load(checkpoint_path, map_location=DEVICE)
         model.load_state_dict(ckpt["model"])
         if "optimizer" in ckpt:
@@ -461,7 +515,7 @@ def train():
         if "scaler" in ckpt and USE_AMP:
             scaler.load_state_dict(ckpt["scaler"])
         start_epoch   = ckpt["epoch"] + 1
-        best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        best_val_sdr  = ckpt.get("best_val_sdr", float("-inf"))
         del ckpt
         # Keep earlier epochs in the log when resuming (v1 lost epochs 1-71 this way)
         if os.path.exists(log_path):
@@ -470,10 +524,10 @@ def train():
                     log = [e for e in json.load(f) if e.get("epoch", 0) <= start_epoch]
             except (ValueError, OSError):
                 print("WARNING: could not read existing log, starting a new one")
-        print("Resuming v2 from epoch " + str(start_epoch + 1)
+        print("Resuming from epoch " + str(start_epoch + 1)
               + " (" + str(len(log)) + " earlier epochs in the log)")
     else:
-        print("Starting fresh v2 training")
+        print("Starting fresh v3 training")
 
     print("\nStarting training...")
     print("Batch size: " + str(BATCH_SIZE) + " | Epochs: " + str(N_EPOCHS))
@@ -501,18 +555,19 @@ def train():
             return
         train_loss = float(np.mean(train_losses))
 
-        val_loss, pred_rms, level_ratio = evaluate(model, val_loader, USE_AMP)
+        val_loss, pred_rms, level_ratio, val_sdr, sdr_per_cat = evaluate(
+            model, val_loader, USE_AMP)
         scheduler.step()
 
         lr_now  = optimizer.param_groups[0]["lr"]
         minutes = (time.time() - t_epoch) / 60
         collapse_warning = "  <-- WARNING: low output energy, possible collapse" \
-                            if pred_rms < 0.01 else ""
+                            if pred_rms < 0.005 else ""
 
         print("Epoch " + str(epoch+1).rjust(3)
               + " | train: " + str(round(train_loss, 4)).rjust(8)
               + " | val: "   + str(round(val_loss,   4)).rjust(8)
-              + " | pred_rms: " + str(round(pred_rms, 5)).rjust(8)
+              + " | SDR: "   + (str(round(val_sdr, 2)) + " dB").rjust(8)
               + " | level: " + str(round(level_ratio, 2)).rjust(5)
               + " | lr: "    + str(round(lr_now, 6))
               + " | " + str(round(minutes)) + " min"
@@ -523,6 +578,8 @@ def train():
             "epoch": epoch+1,
             "train_loss":  round(train_loss, 4),
             "val_loss":    round(val_loss,   4),
+            "val_sdr_db":  round(val_sdr, 2),
+            "sdr_per_stem": sdr_per_cat,
             "pred_rms":    round(pred_rms, 6),
             "level_ratio": round(level_ratio, 3),
             "lr":          round(float(lr_now), 6),
@@ -533,10 +590,14 @@ def train():
         with open(log_path, "w") as f:
             json.dump(log, f, indent=2)
 
-        # Decide "best" BEFORE saving latest, so a resume sees the right value
-        is_best = val_loss < best_val_loss
+        print("          per stem (dB): " + ", ".join(
+            c + " " + str(v) for c, v in sdr_per_cat.items()))
+
+        # "Best" = best separation in dB. Decided BEFORE saving latest, so a
+        # resume sees the right value.
+        is_best = val_sdr > best_val_sdr
         if is_best:
-            best_val_loss = val_loss
+            best_val_sdr = val_sdr
 
         torch.save({
             "epoch":         epoch,
@@ -545,7 +606,9 @@ def train():
             "scaler":        scaler.state_dict(),
             "train_loss":    train_loss,
             "val_loss":      val_loss,
-            "best_val_loss": best_val_loss,
+            "val_sdr":       val_sdr,
+            "best_val_sdr":  best_val_sdr,
+            "config":        model_config,
             "categories":    CATEGORIES,
         }, checkpoint_path + ".tmp")
         os.replace(checkpoint_path + ".tmp", checkpoint_path)   # never a half-written file
@@ -555,22 +618,27 @@ def train():
                 "epoch":      epoch,
                 "model":      model.state_dict(),
                 "val_loss":   val_loss,
+                "val_sdr":    val_sdr,
+                "config":     model_config,
                 "categories": CATEGORIES,
-            }, os.path.join(MODELS_DIR, "separator_v2_best.pt"))
-            print("  --> New best v2 model saved (val_loss=" + str(round(val_loss, 4)) + ")")
+            }, best_path + ".tmp")
+            os.replace(best_path + ".tmp", best_path)
+            print("  --> New best model saved (SDR " + str(round(val_sdr, 2)) + " dB)")
 
         if (epoch + 1) % SAVE_EVERY == 0:
             torch.save({
                 "epoch":      epoch,
                 "model":      model.state_dict(),
                 "val_loss":   val_loss,
+                "val_sdr":    val_sdr,
+                "config":     model_config,
                 "categories": CATEGORIES,
-            }, os.path.join(MODELS_DIR, "separator_v2_epoch" + str(epoch+1) + ".pt"))
+            }, os.path.join(MODELS_DIR, CHECKPOINT_NAME + "_epoch" + str(epoch+1) + ".pt"))
 
     print("\n" + "=" * 60)
-    print("TRAINING COMPLETE (v2)")
-    print("Best val loss: " + str(round(best_val_loss, 4)))
-    print("Best model: " + os.path.join(MODELS_DIR, "separator_v2_best.pt"))
+    print("TRAINING COMPLETE (v3)")
+    print("Best separation: " + str(round(best_val_sdr, 2)) + " dB")
+    print("Best model: " + best_path)
     print("=" * 60)
 
 

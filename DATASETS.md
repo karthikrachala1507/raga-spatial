@@ -8,8 +8,8 @@ All data lives on `D:\raga-spatial-data` (nothing large is stored in this repo).
 | `processed\stems\<category>\` | Tier 1 clips: 10 s, 16 kHz mono |
 | `datasets\<name>\` | Open datasets, stems only (see below) |
 | `processed\stems_t2\<category>\` | Tier 2 clips cut from those datasets |
-| `models\` | Checkpoints (`separator_v2_best.pt` is what the app uses) |
-| `logs\training_log_v2.json` | One line per epoch |
+| `models\` | Checkpoints (`separator_v3_best.pt` is what the app uses) |
+| `logs\training_log_v3.json` | One line per epoch |
 
 ## Open datasets (Tier 2)
 

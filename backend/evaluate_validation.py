@@ -16,7 +16,7 @@
 #
 # Usage:
 #   python evaluate_validation.py                       (best checkpoint, 80 mixes)
-#   python evaluate_validation.py separator_v2_latest.pt 120
+#   python evaluate_validation.py separator_v3_latest.pt 120
 #   set RAGA_DEVICE=cpu   to keep the GPU free while training is running
 
 import os
@@ -44,13 +44,13 @@ def wiener(mix, preds, window):
 
 
 def main():
-    name   = sys.argv[1] if len(sys.argv) > 1 else "separator_v2_best.pt"
+    name   = sys.argv[1] if len(sys.argv) > 1 else "separator_v3_best.pt"
     n_mix  = int(sys.argv[2]) if len(sys.argv) > 2 else 80
     device = os.environ.get("RAGA_DEVICE", ts.DEVICE)
     path   = name if os.path.isabs(name) else os.path.join(ts.MODELS_DIR, name)
 
     ckpt  = torch.load(path, map_location="cpu")
-    model = ts.BandSplitRNN(n_stems=ts.N_STEMS)
+    model = ts.BandSplitRNN(n_stems=ts.N_STEMS, **ckpt.get("config", {}))
     model.load_state_dict(ckpt["model"])
     model = model.to(device).eval()
     print("Checkpoint: " + path + " (epoch " + str(ckpt["epoch"] + 1) + ") on " + device)

@@ -32,8 +32,8 @@ CATEGORIES = [
 
 # Where to look for the trained model, in order. RAGA_SEP8_MODEL overrides.
 MODEL_CANDIDATES = [
-    os.path.join(BACKEND_DIR, "models", "separator_v2_best.pt"),
-    r"D:\raga-spatial-data\models\separator_v2_best.pt",
+    os.path.join(BACKEND_DIR, "models", "separator_v3_best.pt"),
+    r"D:\raga-spatial-data\models\separator_v3_best.pt",
 ]
 
 MODEL_SR    = 16000
@@ -78,7 +78,7 @@ def pick_device():
 def load_model(device):
     path = find_model()
     if path is None:
-        raise FileNotFoundError("No 8-stem model found (separator_v2_best.pt)")
+        raise FileNotFoundError("No 8-stem model found (separator_v3_best.pt)")
     key = (path, os.path.getmtime(path), device)
     if key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
@@ -86,7 +86,7 @@ def load_model(device):
         sys.path.insert(0, BACKEND_DIR)
     from train_separator import BandSplitRNN
     ckpt  = torch.load(path, map_location="cpu")
-    model = BandSplitRNN(n_stems=len(CATEGORIES))
+    model = BandSplitRNN(n_stems=len(CATEGORIES), **ckpt.get("config", {}))
     model.load_state_dict(ckpt["model"])
     model = model.to(device).eval()
     epoch = int(ckpt.get("epoch", -1)) + 1
