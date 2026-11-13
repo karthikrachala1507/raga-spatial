@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from core.renderer import run_full_pipeline, get_pipeline_status
 
-TEST_FILE = "test.flac"
+TEST_FILE = "tests/test_song.flac"
 JOB_ID    = "test_render"
 
 

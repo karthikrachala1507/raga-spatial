@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from core.preprocess import load_audio, resample_for_beats
 from core.detector import detect_instruments, detect_from_stems, summarise_detections
 
-TEST_FILE        = "test.flac"
+TEST_FILE        = "tests/test_song.flac"
 VOCALS_STEM      = os.path.join("outputs", "stems", "test_job_vocals.wav")
 INSTR_STEM       = os.path.join("outputs", "stems", "test_job_instrumental.wav")
 OUT_MIX_JSON     = os.path.join("outputs", "json", "test_detections_mix.json")

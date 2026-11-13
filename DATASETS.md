@@ -5,10 +5,10 @@ All data lives in the `data\` folder of the project (`D:\raga-spatial\data`). It
 | Folder | What it is |
 |---|---|
 | `raw_stems\` | Tier 1 raw downloads (FreeSounds previews + YouTube audio) |
-| `processed\stems\<category>\` | Tier 1 clips: 10 s, 16 kHz mono |
+| `processed\stems_t1\<category>\` | Tier 1 clips: 10 s, 16 kHz mono |
 | `datasets\<name>\` | Open datasets, stems only (see below) |
 | `processed\stems_t2\<category>\` | Tier 2 clips cut from those datasets |
-| `models\` | Checkpoints (`separator_v3_best.pt` is what the app uses) |
+| `checkpoints\` | Trained separator (`separator_v3_best.pt` is what the app uses) |
 | `logs\training_log_v3.json` | One line per epoch |
 
 ## Open datasets (Tier 2)

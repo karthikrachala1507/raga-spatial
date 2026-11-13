@@ -1,20 +1,29 @@
-backend/venv/
+# Raga Spatial - what stays out of git
+
+# Everything large: datasets, clips, checkpoints, logs
+data/
+
+# Private project notes
+docs/
+
+# App model files and per-song outputs
 backend/models/
 backend/outputs/
-backend/core/__pycache__/
-backend/__pycache__/
+
+# Secrets (copy backend/.env.example to backend/.env)
+.env
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Model and audio files anywhere (the tracked test song is the one exception)
 *.ckpt
 *.pt
 *.wav
 *.mp3
 *.flac
-.env
-.claude/
 
-# everything large lives here
-data/
-# private project notes
-docs/
+# Tool settings
+.claude/

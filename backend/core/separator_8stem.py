@@ -1,5 +1,6 @@
-# Raga Spatial - core/separator8.py
-# 8-stem separation with the custom BSRNN model (train_separator.py).
+# Raga Spatial - core/separator_8stem.py
+# 8-stem separation with the custom band-split RNN (core/bsrnn.py),
+# trained by training/train_separator.py.
 #
 # The model works at 16 kHz mono, which on its own would cap every stem at
 # 8 kHz. To keep the full 44.1 kHz bandwidth, the model's output is used only
@@ -37,7 +38,7 @@ import paths
 # Where to look for the trained model, in order. RAGA_SEP8_MODEL overrides.
 MODEL_CANDIDATES = [
     os.path.join(paths.APP_MODELS_DIR, "separator_v3_best.pt"),
-    os.path.join(paths.MODELS_DIR, "separator_v3_best.pt"),
+    os.path.join(paths.CHECKPOINTS_DIR, "separator_v3_best.pt"),
 ]
 
 MODEL_SR    = 16000
@@ -88,7 +89,7 @@ def load_model(device):
         return _MODEL_CACHE[key]
     if BACKEND_DIR not in sys.path:
         sys.path.insert(0, BACKEND_DIR)
-    from train_separator import BandSplitRNN
+    from core.bsrnn import BandSplitRNN
     ckpt  = torch.load(path, map_location="cpu")
     model = BandSplitRNN(n_stems=len(CATEGORIES), **ckpt.get("config", {}))
     model.load_state_dict(ckpt["model"])

@@ -12,8 +12,8 @@ import paths
 # can run while training is running.
 #
 # Usage:
-#   python prepare_datasets.py              (every dataset that finished downloading)
-#   python prepare_datasets.py slakh2100    (only the named ones)
+#   python data_tools\prepare_datasets.py              (every dataset that finished downloading)
+#   python data_tools\prepare_datasets.py slakh2100    (only the named ones)
 #
 # Safe to stop and rerun: sources already processed are skipped.
 

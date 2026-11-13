@@ -9,7 +9,7 @@ Raga Spatial — Test preprocess.py
 Run this to verify preprocessing works on a real audio file.
 
 Usage:
-    python test_preprocess.py
+    python tests\test_preprocess.py
 """
 
 import sys

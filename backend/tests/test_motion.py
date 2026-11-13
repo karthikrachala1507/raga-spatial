@@ -19,7 +19,7 @@ from core.preprocess import (load_audio, normalize_audio, extract_chroma,
 from core.motion import (detect_motion_events, build_motion_timeline,
                           summarise_motion, NOTE_NAMES)
 
-TEST_FILE      = "test.flac"
+TEST_FILE      = "tests/test_song.flac"
 DETECTIONS_JSON = os.path.join("outputs", "json", "test_detections_stems.json")
 OUTPUT_JSON     = os.path.join("outputs", "json", "test_motion.json")
 

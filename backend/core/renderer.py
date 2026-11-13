@@ -78,8 +78,8 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None):
               + str(round(time.time()-t, 1)) + "s]")
 
     # 8-stem path: used whenever the custom separator model is available
-    from core import separator8
-    if separator8.is_available() and os.environ.get("RAGA_FORCE_2STEM") != "1":
+    from core import separator_8stem
+    if separator_8stem.is_available() and os.environ.get("RAGA_FORCE_2STEM") != "1":
         return _run_8stem_pipeline(
             audio_path, job_id, audio, sr, duration_sec,
             tempo, beats, onsets, pipeline_start, _progress)
@@ -87,7 +87,7 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None):
     # Step 2: Source separation
     _progress(2, "Separating stems (MelBandRoformer)...")
     t = time.time()
-    from core.separator import separate_stems
+    from core.separator_2stem import separate_stems
     stems = separate_stems(audio, sr, job_id)
     _progress(2, "Separation done: "
               + str(list(stems.keys())) + " ["
@@ -221,8 +221,8 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     own azimuth and depth layer and render to binaural.
     """
     import soxr
-    from core import separator8, spatial8
-    from core.spatial8 import STEM_LAYOUT, STEM_ORDER
+    from core import separator_8stem, spatial_8stem
+    from core.spatial_8stem import STEM_LAYOUT, STEM_ORDER
 
     # Step 2: separation
     _progress(2, "Separating into 8 stems...")
@@ -234,19 +234,19 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     if want_hybrid:
         try:
             _progress(2, "Extracting vocals (MelBandRoformer)...")
-            from core.separator import separate_stems
+            from core.separator_2stem import separate_stems
             two_stem = separate_stems(audio, sr, job_id)
         except Exception as e:
             print("[Pipeline] MelBandRoformer failed (" + str(e) + "), using the 8-stem model alone")
             two_stem = {}
-    sep = separator8.separate_8stems(
+    sep = separator_8stem.separate_8stems(
         audio, sr, job_id,
         vocals_path       = two_stem.get("vocals"),
         instrumental_path = two_stem.get("instrumental"),
         progress          = lambda msg: _progress(2, msg),
     )
     stems  = sep["audio"]
-    levels = spatial8.stem_levels(stems, sr)
+    levels = spatial_8stem.stem_levels(stems, sr)
     active = [s for s in STEM_ORDER if levels[s]["active"]]
     _progress(2, "Separation done (" + sep["mode"] + "): " + str(len(active))
               + " active stems [" + str(round(time.time()-t, 1)) + "s]")
@@ -265,7 +265,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
                     continue
                 _progress(3, "Detecting instruments in " + STEM_LAYOUT[name]["label"] + "...")
                 windows = detect_instruments(a16 / peak * 0.9, sr=16000, stem_name=name)
-                stem_instruments[name] = spatial8.name_instruments(name, windows)
+                stem_instruments[name] = spatial_8stem.name_instruments(name, windows)
         except Exception as e:
             print("[Pipeline] Per-stem detection failed: " + str(e))
     _progress(3, "Detection done [" + str(round(time.time()-t, 1)) + "s]")
@@ -277,7 +277,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     from core.motion import detect_motion_events, summarise_motion
     events_by_stem = {}
     motion_events  = []
-    for name in spatial8.MOTION_CARRIERS:
+    for name in spatial_8stem.MOTION_CARRIERS:
         if not levels[name]["active"] or levels[name]["share"] < 0.03:
             continue
         try:
@@ -319,20 +319,20 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     trajectories, moving = {}, {}
     for name, events in events_by_stem.items():
         if events:
-            trajectories[name], moving[name] = spatial8.build_trajectory(
+            trajectories[name], moving[name] = spatial_8stem.build_trajectory(
                 name, events, duration_sec)
 
     # Step 6: binaural rendering
     _progress(6, "Rendering binaural audio (HRTF + depth)...")
     t = time.time()
-    spatial_wav, binaural_paths = spatial8.render_stems(
+    spatial_wav, binaural_paths = spatial_8stem.render_stems(
         stems, sr, job_id, trajectories, levels,
         progress=lambda msg: _progress(6, msg))
     _progress(6, "HRTF render done [" + str(round(time.time()-t, 1)) + "s]")
 
     # Step 7: export
     _progress(7, "Exporting metadata JSON...")
-    env_step = int(round((1.0 / spatial8.ENVELOPE_HZ) / spatial8.TRAJECTORY_RES_SEC))
+    env_step = int(round((1.0 / spatial_8stem.ENVELOPE_HZ) / spatial_8stem.TRAJECTORY_RES_SEC))
     stems8 = []
     for name in STEM_ORDER:
         layout, lv = STEM_LAYOUT[name], levels[name]
@@ -367,7 +367,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
 
     # one entry every 0.5 s, same shape the 2-stem UI already understands
     spatial_timeline = []
-    for i in range(0, int(duration_sec * spatial8.ENVELOPE_HZ), 2):
+    for i in range(0, int(duration_sec * spatial_8stem.ENVELOPE_HZ), 2):
         instruments = []
         for s in stems8:
             if not s["active"] or i >= len(s["envelope"]) or s["envelope"][i] < 0.03:
@@ -379,7 +379,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
                 "distance":  s["distance"],
                 "in_motion": bool(s["trajectory"]) and abs(az - s["azimuth"]) > 2.5,
             })
-        spatial_timeline.append({"time_sec": round(i / spatial8.ENVELOPE_HZ, 2),
+        spatial_timeline.append({"time_sec": round(i / spatial_8stem.ENVELOPE_HZ, 2),
                                  "instruments": instruments})
 
     output = {
@@ -393,7 +393,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
         "onset_count":       len(onsets),
         "stems":             sep["paths"],
         "stems8":            stems8,
-        "envelope_hz":       spatial8.ENVELOPE_HZ,
+        "envelope_hz":       spatial_8stem.ENVELOPE_HZ,
         "spatial_wav":       spatial_wav,
         "detection_summary": detection_summary,
         "motion_summary":    motion_summary,
@@ -431,7 +431,7 @@ def get_pipeline_status():
     status = {}
     modules = [
         ("preprocess", "core.preprocess", "load_audio"),
-        ("separator",  "core.separator",  "separate_stems"),
+        ("separator",  "core.separator_2stem",  "separate_stems"),
         ("detector",   "core.detector",   "detect_instruments"),
         ("motion",     "core.motion",     "detect_motion_events"),
         ("spatial",    "core.spatial",    "assign_spatial_positions"),
@@ -458,7 +458,7 @@ def get_pipeline_status():
 
 def get_separator_mode():
     """Which separation the next upload will use."""
-    from core import separator8
-    if separator8.is_available() and os.environ.get("RAGA_FORCE_2STEM") != "1":
-        return {"mode": "8-stem", "model": separator8.find_model()}
+    from core import separator_8stem
+    if separator_8stem.is_available() and os.environ.get("RAGA_FORCE_2STEM") != "1":
+        return {"mode": "8-stem", "model": separator_8stem.find_model()}
     return {"mode": "2-stem", "model": None}

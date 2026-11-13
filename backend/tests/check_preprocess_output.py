@@ -12,7 +12,7 @@ from core.preprocess import (load_audio, normalize_audio, extract_mel_spectrogra
                               extract_chroma, create_windows, resample_for_beats,
                               get_tempo_and_beats)
 
-audio, sr = load_audio("test.flac")
+audio, sr = load_audio("tests/test_song.flac")
 audio     = normalize_audio(audio)
 
 mel                  = extract_mel_spectrogram(audio, sr)

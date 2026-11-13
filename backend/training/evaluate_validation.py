@@ -1,10 +1,14 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 # Raga Spatial - evaluate_validation.py
 # Measures how well a checkpoint SEPARATES, in dB, on the fixed validation
 # mixes (built from source files the model never trained on).
 #
 # For every stem that is present in a mix it reports SDR in dB:
 #   model   : the stem as the app produces it (model output turned into soft
-#             masks on the mix, the same thing core/separator8.py does)
+#             masks on the mix, the same thing core/separator_8stem.py does)
 #   raw out : the model's direct output
 #   mix     : what you get by using the whole mix as the stem (reference only)
 #
@@ -14,9 +18,9 @@
 #   4-6 dB  = usable for spatial placement.
 #    7+ dB  = good.
 #
-# Usage:
-#   python evaluate_validation.py                       (best checkpoint, 80 mixes)
-#   python evaluate_validation.py separator_v3_latest.pt 120
+# Usage (from backend\):
+#   python training\evaluate_validation.py                       (best checkpoint, 80 mixes)
+#   python training\evaluate_validation.py separator_v3_latest.pt 120
 #   set RAGA_DEVICE=cpu   to keep the GPU free while training is running
 
 import os
@@ -47,7 +51,7 @@ def main():
     name   = sys.argv[1] if len(sys.argv) > 1 else "separator_v3_best.pt"
     n_mix  = int(sys.argv[2]) if len(sys.argv) > 2 else 80
     device = os.environ.get("RAGA_DEVICE", ts.DEVICE)
-    path   = name if os.path.isabs(name) else os.path.join(ts.MODELS_DIR, name)
+    path   = name if os.path.isabs(name) else os.path.join(ts.CHECKPOINTS_DIR, name)
 
     ckpt  = torch.load(path, map_location="cpu")
     model = ts.BandSplitRNN(n_stems=ts.N_STEMS, **ckpt.get("config", {}))

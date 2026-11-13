@@ -15,14 +15,14 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DATA_DIR    = os.environ.get("RAGA_DATA_DIR", os.path.join(PROJECT_DIR, "data"))
 
-RAW_STEMS_DIR  = os.path.join(DATA_DIR, "raw_stems")              # Tier 1 raw downloads
-STEMS_T1_DIR   = os.path.join(DATA_DIR, "processed", "stems")     # Tier 1 clips
-STEMS_T2_DIR   = os.path.join(DATA_DIR, "processed", "stems_t2")  # Tier 2 clips (open datasets)
-DATASETS_DIR   = os.path.join(DATA_DIR, "datasets")               # open datasets, stems only
-MODELS_DIR     = os.path.join(DATA_DIR, "models")                 # separator checkpoints
-LOGS_DIR       = os.path.join(DATA_DIR, "logs")                   # training logs
-REAL_SONGS_DIR = os.path.join(DATA_DIR, "real_songs")             # full songs for listening tests
-EVAL_DIR       = os.path.join(DATA_DIR, "evaluation")             # stems written by evaluate_separator.py
+RAW_STEMS_DIR   = os.path.join(DATA_DIR, "raw_stems")              # Tier 1 raw downloads
+STEMS_T1_DIR    = os.path.join(DATA_DIR, "processed", "stems_t1")  # Tier 1 clips (FreeSounds, YouTube)
+STEMS_T2_DIR    = os.path.join(DATA_DIR, "processed", "stems_t2")  # Tier 2 clips (open datasets)
+DATASETS_DIR    = os.path.join(DATA_DIR, "datasets")               # open datasets, stems only
+CHECKPOINTS_DIR = os.path.join(DATA_DIR, "checkpoints")            # separator checkpoints from training
+LOGS_DIR        = os.path.join(DATA_DIR, "logs")                   # training logs
+REAL_SONGS_DIR  = os.path.join(DATA_DIR, "real_songs")             # full songs for listening tests
+EVAL_DIR        = os.path.join(DATA_DIR, "evaluation")             # stems written by evaluate_separator.py
 
-APP_MODELS_DIR = os.path.join(BACKEND_DIR, "models")              # MelBandRoformer, BEATs, HRTF file
-OUTPUTS_DIR    = os.path.join(BACKEND_DIR, "outputs")             # what the app produces per job
+APP_MODELS_DIR  = os.path.join(BACKEND_DIR, "models")              # MelBandRoformer, BEATs, HRTF file
+OUTPUTS_DIR     = os.path.join(BACKEND_DIR, "outputs")             # what the app produces per job

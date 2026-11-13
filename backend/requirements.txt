@@ -1,33 +1,38 @@
-# Raga Spatial — Backend Dependencies
-# Install with: pip install -r requirements.txt
+# Raga Spatial - Python packages, at the versions this project runs on
+# (conda env "raga-spatial", Python 3.11).
+#
+# torch and numpy are LOCKED. Other installs sometimes upgrade numpy to 2.x;
+# after any pip install run:
+#   python -c "import numpy, torch; print(numpy.__version__, torch.__version__)"
+# and expect 1.26.4 and 2.3.0+cu118.
 
-# Web Framework
-fastapi==0.111.0
-uvicorn[standard]==0.30.1
-python-multipart==0.0.9
-
-# Task Queue
-celery==5.4.0
-redis==5.0.4
-
-# Audio Processing
-librosa==0.10.2
-soundfile==0.12.1
-scipy==1.13.0
-numpy==1.26.4
-audioread==3.0.1
-
-# AI / ML
+# Locked
+# torch comes from the CUDA 11.8 index:
+#   pip install torch==2.3.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu118
 torch==2.3.0
 torchaudio==2.3.0
-transformers==4.41.0
-einops==0.8.0
+numpy==1.26.4
 
-# HRTF / Spatial Audio
-pysofaconventions==0.1.9
+# App (FastAPI backend)
+fastapi==0.136.1
+uvicorn==0.47.0
+python-multipart==0.0.28
 
-# Utilities
-python-dotenv==1.0.1
-aiofiles==23.2.1
-httpx==0.27.0
-pydantic==2.7.1
+# Audio
+librosa==0.11.0
+soundfile==0.13.1
+soxr==0.5.0.post1
+scipy==1.17.1
+audioread==3.1.0
+pysofaconventions==0.1.5
+
+# Models
+BS-RoFormer==1.1.0
+einops==0.8.2
+
+# Training and data tools
+tqdm==4.67.3
+requests==2.34.2
+PyYAML==6.0.3
+yt-dlp==2026.3.17
+static-ffmpeg==3.0

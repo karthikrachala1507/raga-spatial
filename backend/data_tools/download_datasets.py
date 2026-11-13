@@ -8,8 +8,8 @@ import paths
 # and extracts only the audio the separator needs (isolated stems).
 #
 # Usage:
-#   python download_datasets.py                 (everything, in priority order)
-#   python download_datasets.py saraga_carnatic (one or more by name)
+#   python data_tools\download_datasets.py                 (everything, in priority order)
+#   python data_tools\download_datasets.py saraga_carnatic (one or more by name)
 #
 # Safe to stop and rerun: downloads resume, finished datasets are skipped.
 # Licences: several of these are NON-COMMERCIAL / research-only. See DATASETS.md.

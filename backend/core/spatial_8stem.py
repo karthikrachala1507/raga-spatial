@@ -1,4 +1,4 @@
-# Raga Spatial - core/spatial8.py
+# Raga Spatial - core/spatial_8stem.py
 # 8-stem spatial layout, depth layering, per-stem analysis and binaural rendering.
 #
 # Azimuth: 0 = front, 90 = right, 180 = rear, 270 = left.

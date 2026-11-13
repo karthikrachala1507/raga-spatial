@@ -2,7 +2,7 @@
 # Checks for the 8-stem pipeline.
 #
 #   python tests\test_8stem.py            (quick audio checks, about 1 minute)
-#   python tests\test_8stem.py pipeline   (whole pipeline on test.flac, a few minutes)
+#   python tests\test_8stem.py pipeline   (whole pipeline on the test song, a few minutes)
 #
 # "pipeline" uses the trained model if there is one; otherwise it makes an
 # untrained one, which still checks that every stage runs and fits together.
@@ -33,7 +33,7 @@ def ripple(binaural):
 
 
 def units():
-    from core import hrtf, separator8
+    from core import hrtf, separator_8stem
     sofa = hrtf.load_sofa()
     results = []
 
@@ -64,7 +64,7 @@ def units():
     x = (np.random.RandomState(1).randn(SR * 12) * 0.1).astype(np.float32)
     est = np.random.RandomState(2).randn(4, 16000 * 12).astype(np.float32) \
         * np.array([1.0, 0.5, 0.2, 0.001])[:, None]
-    stems, shares = separator8.fullband_stems(x, est, SR)
+    stems, shares = separator_8stem.fullband_stems(x, est, SR)
     err = float(np.abs(stems.sum(0) - x)[4096:-4096].max())
     results.append(check("full-band stems add back up to the input", err < 1e-4, "max error %.1e" % err))
     results.append(check("a near-silent stem is treated as absent", shares[3] == 0.0))
@@ -74,11 +74,12 @@ def units():
 def pipeline():
     import torch
     import soundfile as sf
-    from core import separator8
+    from core import separator_8stem
     results = []
 
-    if not separator8.is_available():
-        from train_separator import BandSplitRNN, FEATURE_DIM, N_BLOCKS
+    if not separator_8stem.is_available():
+        from core.bsrnn import (BandSplitRNN, DEFAULT_FEATURE_DIM as FEATURE_DIM,
+                                DEFAULT_N_BLOCKS as N_BLOCKS)
         path = os.path.join(tempfile.gettempdir(), "raga_untrained_sep8.pt")
         torch.manual_seed(0)
         torch.save({"epoch": -1,
@@ -90,7 +91,7 @@ def pipeline():
 
     from core.renderer import run_full_pipeline
     from core.preprocess import load_audio, normalize_audio
-    song = os.path.join(_BACKEND, "test.flac")
+    song = os.path.join(_BACKEND, "tests", "test_song.flac")
     for old in glob.glob(os.path.join(_BACKEND, "outputs", "*", "t8test_*")):
         os.remove(old)                      # leftovers from an earlier test run
     t = time.time()

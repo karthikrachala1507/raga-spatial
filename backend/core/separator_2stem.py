@@ -1,5 +1,6 @@
-# Raga Spatial - core/separator.py
-# MelBandRoformer Source Separation Module
+# Raga Spatial - core/separator_2stem.py
+# MelBandRoformer source separation: vocals + instrumental.
+# Used alone when no 8-stem model exists, and for the vocals in hybrid mode.
 
 import torch
 import numpy as np
@@ -10,8 +11,7 @@ import os
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
 STEMS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "outputs", "stems")
 
-MELBAND_MODEL    = os.path.join(MODELS_DIR, "MelBandRoformer.ckpt")
-BSROFORMER_MODEL = os.path.join(MODELS_DIR, "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+MELBAND_MODEL = os.path.join(MODELS_DIR, "MelBandRoformer.ckpt")
 
 TARGET_SR  = 44100
 CHUNK_SIZE = 352800
@@ -40,16 +40,13 @@ def separate_stems(audio, sr, job_id):
 def load_model():
     from bs_roformer import MelBandRoformer
 
-    # Always use MelBandRoformer.ckpt — the other checkpoint has dim=512
-    # which is incompatible with our dim=384 architecture
-    if os.path.exists(MELBAND_MODEL):
-        model_path = MELBAND_MODEL
-        print("[Separator] Loading MelBandRoformer from: " + MELBAND_MODEL)
-    elif os.path.exists(BSROFORMER_MODEL):
-        model_path = BSROFORMER_MODEL
-        print("[Separator] Loading from: " + BSROFORMER_MODEL)
-    else:
-        raise FileNotFoundError("No model found in " + MODELS_DIR)
+    # Only MelBandRoformer.ckpt fits this model (dim=384). The BSRoformer
+    # checkpoint that used to be tried as a fallback has dim=512 and always
+    # failed with a size mismatch, so it is no longer loaded.
+    if not os.path.exists(MELBAND_MODEL):
+        raise FileNotFoundError("MelBandRoformer.ckpt not found in " + MODELS_DIR)
+    model_path = MELBAND_MODEL
+    print("[Separator] Loading MelBandRoformer from: " + MELBAND_MODEL)
 
     model = MelBandRoformer(
         dim=384,

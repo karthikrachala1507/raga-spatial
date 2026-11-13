@@ -5,7 +5,7 @@ _sys.path.insert(0, _BACKEND)
 _os.chdir(_BACKEND)
 
 # Run on Karthik's machine to diagnose why motion detection returns 0 events
-# Place in backend/ and run: python debug_motion.py
+# Run from backend\: python tests\debug_motion.py
 
 import sys, os, numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
@@ -13,7 +13,7 @@ from core.preprocess import (load_audio, normalize_audio, extract_chroma,
                               detect_onsets, get_tempo_and_beats)
 from scipy.ndimage import uniform_filter1d
 
-audio, sr = load_audio("test.flac")
+audio, sr = load_audio("tests/test_song.flac")
 audio     = normalize_audio(audio)
 chroma    = extract_chroma(audio, sr)
 onsets    = detect_onsets(audio, sr)

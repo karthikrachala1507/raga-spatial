@@ -4,18 +4,18 @@ _BACKEND = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 _sys.path.insert(0, _BACKEND)
 _os.chdir(_BACKEND)
 
-# Raga Spatial - Test separator.py
+# Raga Spatial - Test core/separator_2stem.py
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.preprocess import preprocess_audio
-from core.separator import separate_stems
+from core.separator_2stem import separate_stems
 import time
 
 def test_separator():
     test_file = None
-    for f in ["test.flac", "test.mp3", "test.wav"]:
+    for f in ["tests/test_song.flac", "test.mp3", "test.wav"]:
         if os.path.exists(f):
             test_file = f
             break

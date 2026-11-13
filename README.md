@@ -10,39 +10,66 @@ Everything for this project lives in this one folder.
 
 ```
 raga-spatial\
-├── start_app.bat            double-click: starts the app and opens the browser
+├── start_app.bat              double-click: starts the app and opens the browser
+├── start_training.bat         double-click: start or resume training
 ├── README.md  DATASETS.md
+│
 ├── backend\
-│   ├── start_training.bat   double-click: start or resume training
-│   ├── paths.py             the one file that says where everything lives
-│   ├── main.py  api\  core\ the app (FastAPI): separation, positions, HRTF rendering
-│   ├── train_separator.py   trains the 8-stem model
-│   ├── evaluate_validation.py   how well a checkpoint separates, in dB
-│   ├── evaluate_separator.py    writes the 8 stems of a real song, to listen to
-│   ├── data_tools\          download and prepare training data
-│   ├── tests\               checks and diagnostics
-│   ├── models\              MelBandRoformer, BEATs and HRTF files used by the app
-│   └── outputs\             what the app produces for each uploaded song
-├── frontend\                the React UI (8-zone map and stem mixer)
-└── data\                    everything large (not in git)
-    ├── raw_stems\           Tier 1 raw downloads (FreeSounds, YouTube)
-    ├── datasets\            open datasets, stems only
-    ├── processed\stems\     Tier 1 training clips
-    ├── processed\stems_t2\  Tier 2 training clips (from the open datasets)
-    ├── models\              separator checkpoints (separator_v3_best.pt is used by the app)
-    ├── logs\                training_log_v3.json, one entry per epoch
-    ├── real_songs\          full songs for listening tests
-    └── evaluation\          stems written by evaluate_separator.py
+│   ├── paths.py               the one file that says where everything lives
+│   ├── main.py  api\          the web server (FastAPI) and its routes
+│   ├── core\                  the audio pipeline
+│   │   ├── preprocess.py        load audio, tempo, onsets, chroma
+│   │   ├── separator_2stem.py   MelBandRoformer: vocals + instrumental
+│   │   ├── separator_8stem.py   the custom model: 8 full-bandwidth stems
+│   │   ├── bsrnn.py             the 8-stem model itself
+│   │   ├── detector.py          BEATs: names the instruments in each stem
+│   │   ├── motion.py            finds melodic runs that should move in space
+│   │   ├── spatial.py           positions by instrument label (2-stem path)
+│   │   ├── spatial_8stem.py     the 8 positions, depth layers and rendering
+│   │   ├── hrtf.py              binaural (HRTF) rendering and distance effects
+│   │   └── renderer.py          runs the whole pipeline for one song
+│   ├── training\
+│   │   ├── train_separator.py     trains the 8-stem model
+│   │   ├── evaluate_validation.py scores a checkpoint in dB
+│   │   └── evaluate_separator.py  writes the 8 stems of a real song, to listen to
+│   ├── data_tools\            download and prepare training data
+│   ├── tests\                 checks and diagnostics (test_song.flac is the test song)
+│   ├── models\                MelBandRoformer, BEATs and HRTF files used by the app
+│   └── outputs\               what the app produces for each uploaded song
+│
+├── frontend\                  the React UI (8-zone map and stem mixer)
+│
+└── data\                      everything large (not in git)
+    ├── raw_stems\             Tier 1 raw downloads (FreeSounds, YouTube)
+    ├── datasets\              open datasets, stems only
+    ├── processed\stems_t1\    Tier 1 training clips
+    ├── processed\stems_t2\    Tier 2 training clips (from the open datasets)
+    ├── checkpoints\           trained separator (separator_v3_best.pt is used by the app)
+    ├── logs\                  training_log_v3.json, one entry per epoch
+    ├── real_songs\            full songs for listening tests
+    └── evaluation\            stems written by evaluate_separator.py
 ```
+
+There are two model folders on purpose: `backend\models\` holds the
+downloaded models the app needs, `data\checkpoints\` holds what training
+produces.
 
 The Python environment is the conda env `raga-spatial` in
 `C:\ProgramData\miniconda3\envs\raga-spatial`. It stays there: conda
 environments cannot simply be moved. PyTorch 2.3.0+cu118 and NumPy 1.26.4
-are locked; check after any `pip install`.
+are locked; check after any `pip install` (see `backend\requirements.txt`).
 
 ## Everyday commands
 
-Open a terminal, then:
+The two things you do most need no terminal:
+
+| What | How |
+|---|---|
+| Start the app | double-click `start_app.bat` |
+| Start or resume training | double-click `start_training.bat` |
+| Pause training | Ctrl+C in its window (it resumes from the last finished epoch) |
+
+For everything else, open a terminal and go to the backend folder first:
 
 ```cmd
 conda activate raga-spatial
@@ -51,11 +78,8 @@ cd /d D:\raga-spatial\backend
 
 | What | Command |
 |---|---|
-| Start the app | double-click `start_app.bat` (project folder) |
-| Start or resume training | double-click `backend\start_training.bat` |
-| Pause training | Ctrl+C in its window (it resumes from the last finished epoch) |
-| Score the current model | `python evaluate_validation.py` |
-| Write stems of a real song | `python evaluate_separator.py --song "D:\path\song.mp3"` |
+| Score the current model | `python training\evaluate_validation.py` |
+| Write stems of a real song | `python training\evaluate_separator.py --song "D:\path\song.mp3"` |
 | Download the open datasets | `python data_tools\download_datasets.py` |
 | Turn datasets into clips | `python data_tools\prepare_datasets.py` |
 | Quick audio checks | `python tests\test_8stem.py` |
@@ -90,4 +114,4 @@ separation quality on songs the model never trained on:
 | 7 | Bass | rear-right | 0.75 |
 | 8 | Folk / texture (dappu, parai, dhol) | left | 0.85 |
 
-Positions and depths are set in `backend\core\spatial8.py` (`STEM_LAYOUT`).
+Positions and depths are set in `backend\core\spatial_8stem.py` (`STEM_LAYOUT`).
