@@ -45,10 +45,10 @@ without any other context.
 | 8-stem backend (separation, positions, depth, rendering) | Works end to end. Tested on a 30 s song and a 5 min song. |
 | 8-zone UI with live stem mixer | Works. Checked in a browser. |
 | Training pipeline | Works. Pause and resume are safe. |
-| Training data | 7 open datasets downloaded. Slakh2100 is 65% converted to clips. Folk / texture clips cleaned on 13 Nov. |
+| Training data | 7 open datasets downloaded. Slakh2100 is 71% converted to clips. Folk / texture clips cleaned on 13 Nov. |
 | **8-stem model (v3)** | **Early. 3 of 100 epochs done. Median 1.3 dB.** Only bass (5.5 dB) is in usable range. |
-| Training | Resumes from epoch 4 automatically once the Slakh conversion finishes (started 13 Nov, 12:46, with `start_data_then_training.bat`). |
-| Slakh conversion | Running since 13 Nov, 12:46. It was at 13,368 of 20,676 stems when resumed; about an hour alone. |
+| Training | **Paused** after epoch 3 (97 epochs left: about 2 days alone). |
+| Slakh conversion | **Paused** at 14,618 of 20,676 stems (71%). About 47 minutes left when run alone. |
 
 **The honest summary:** all the software is built and tested. The model that
 does the actual separating has barely started learning, so stems from a real
