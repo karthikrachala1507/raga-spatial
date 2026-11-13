@@ -1,6 +1,6 @@
 # Training data for the 8-stem separator
 
-All data lives on `D:\raga-spatial-data` (nothing large is stored in this repo).
+All data lives in the `data\` folder of the project (`D:\raga-spatial\data`). It is not in git.
 
 | Folder | What it is |
 |---|---|
@@ -13,7 +13,7 @@ All data lives on `D:\raga-spatial-data` (nothing large is stored in this repo).
 
 ## Open datasets (Tier 2)
 
-Downloaded by `backend\download_datasets.py`, converted by `backend\prepare_datasets.py`.
+Downloaded by `backend\data_tools\download_datasets.py`, converted by `backend\data_tools\prepare_datasets.py`.
 Every one is a direct, no-sign-up download from Zenodo.
 
 | Name | Zenodo record | Download | Used for | Licence |

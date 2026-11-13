@@ -1,7 +1,12 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - prepare_datasets.py
 # Turns the downloaded datasets (download_datasets.py) into Tier 2 training
 # clips: 10 s, 16 kHz mono WAVs, one folder per category, in
-#   D:\raga-spatial-data\processed\stems_t2\<category>\<dataset>__<source>__<n>.wav
+#   <project>\data\processed\stems_t2\<category>\<dataset>__<source>__<n>.wav
 #
 # train_separator.py picks new clips up at the start of its next epoch, so this
 # can run while training is running.
@@ -22,8 +27,8 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-DATASETS_DIR = r"D:\raga-spatial-data\datasets"
-OUT_DIR      = r"D:\raga-spatial-data\processed\stems_t2"
+DATASETS_DIR = paths.DATASETS_DIR
+OUT_DIR      = paths.STEMS_T2_DIR
 DONE_FILE    = os.path.join(OUT_DIR, "_processed_sources.json")
 
 TARGET_SR = 16000

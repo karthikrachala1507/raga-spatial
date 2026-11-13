@@ -13,3 +13,8 @@ __pycache__/
 *.flac
 .env
 .claude/
+
+# everything large lives here
+data/
+# private project notes
+docs/

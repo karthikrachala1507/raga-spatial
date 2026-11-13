@@ -30,10 +30,14 @@ CATEGORIES = [
     "wind", "keys_synth", "vocals", "bass", "folk_texture"
 ]
 
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+import paths
+
 # Where to look for the trained model, in order. RAGA_SEP8_MODEL overrides.
 MODEL_CANDIDATES = [
-    os.path.join(BACKEND_DIR, "models", "separator_v3_best.pt"),
-    r"D:\raga-spatial-data\models\separator_v3_best.pt",
+    os.path.join(paths.APP_MODELS_DIR, "separator_v3_best.pt"),
+    os.path.join(paths.MODELS_DIR, "separator_v3_best.pt"),
 ]
 
 MODEL_SR    = 16000

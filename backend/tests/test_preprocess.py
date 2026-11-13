@@ -1,3 +1,9 @@
+# --- run from anywhere: work inside backend/ (see backend/paths.py) ---
+import os as _os, sys as _sys
+_BACKEND = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_sys.path.insert(0, _BACKEND)
+_os.chdir(_BACKEND)
+
 """
 Raga Spatial — Test preprocess.py
 Run this to verify preprocessing works on a real audio file.

@@ -7,7 +7,7 @@
 #   python evaluate_separator.py --song "D:\path\to\song.mp3"
 #   python evaluate_separator.py --model separator_v3_latest.pt
 #
-# Output: D:\raga-spatial-data\evaluation\<song name>\<stem>.wav (44.1 kHz)
+# Output: <project>\data\evaluation\<song name>\<stem>.wav (44.1 kHz)
 # This is the custom model alone ("pure" mode). The app's default "hybrid"
 # mode takes the vocals from MelBandRoformer instead.
 
@@ -17,9 +17,11 @@ import shutil
 import argparse
 import numpy as np
 
-EVAL_DIR     = r"D:\raga-spatial-data\evaluation"
-MODELS_DIR   = r"D:\raga-spatial-data\models"
-DEFAULT_SONG = r"D:\raga-spatial-data\real_songs\test5.mp3"
+import paths
+
+EVAL_DIR     = paths.EVAL_DIR
+MODELS_DIR   = paths.MODELS_DIR
+DEFAULT_SONG = os.path.join(paths.REAL_SONGS_DIR, "test5.mp3")
 
 
 def main():

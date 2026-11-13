@@ -1,5 +1,10 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - download_datasets.py
-# Downloads open stem datasets from Zenodo into D:\raga-spatial-data\datasets
+# Downloads open stem datasets from Zenodo into <project>\data\datasets
 # and extracts only the audio the separator needs (isolated stems).
 #
 # Usage:
@@ -17,7 +22,7 @@ import tarfile
 import zipfile
 import requests
 
-DATASETS_DIR = r"D:\raga-spatial-data\datasets"
+DATASETS_DIR = paths.DATASETS_DIR
 API = "https://zenodo.org/api/records/"
 CHUNK = 4 * 1024 * 1024
 

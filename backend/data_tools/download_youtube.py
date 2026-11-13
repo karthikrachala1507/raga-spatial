@@ -1,3 +1,8 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - download_youtube.py
 # Downloads South Indian instrument clips from YouTube
 # Fixed: removed strict duration filter, increased results per query
@@ -10,7 +15,7 @@ import sys
 import static_ffmpeg
 static_ffmpeg.add_paths()
 
-DATA_DIR        = r"D:\raga-spatial-data\raw_stems"
+DATA_DIR        = paths.RAW_STEMS_DIR
 CLIPS_PER_QUERY = 5    # try 5 results per query
 TARGET_PER_CAT  = 150  # stop when category reaches this
 

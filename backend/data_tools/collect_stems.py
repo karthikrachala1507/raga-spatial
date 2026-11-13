@@ -1,3 +1,8 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - collect_stems.py
 # Downloads stem clips from FreeSounds API for all 8 categories
 # Uses API key authentication (simpler than OAuth2)
@@ -10,7 +15,7 @@ import json
 # FreeSounds API credentials are read from backend/.env (git-ignored) or from
 # environment variables. Never hardcode them here. See .env.example.
 def _load_env_file():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    env_path = os.path.join(paths.BACKEND_DIR, ".env")
     if not os.path.exists(env_path):
         return
     with open(env_path) as f:
@@ -27,7 +32,7 @@ CLIENT_ID     = os.environ.get("FREESOUND_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("FREESOUND_CLIENT_SECRET", "")
 API_BASE      = "https://freesound.org/apiv2"
 
-DATA_DIR     = r"D:\raga-spatial-data\raw_stems"
+DATA_DIR     = paths.RAW_STEMS_DIR
 TIER1_TARGET = 200
 
 CATEGORY_QUERIES = {

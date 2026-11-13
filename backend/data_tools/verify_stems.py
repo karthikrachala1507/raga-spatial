@@ -1,3 +1,8 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - verify_stems.py
 # Verifies, cleans, and standardizes all downloaded stem clips
 # Converts to 16kHz mono WAV, removes silence-only clips, trims to 10s
@@ -10,8 +15,8 @@ import librosa
 import soundfile as sf
 from tqdm import tqdm
 
-DATA_DIR      = r"D:\raga-spatial-data\raw_stems"
-PROCESSED_DIR = r"D:\raga-spatial-data\processed\stems"
+DATA_DIR      = paths.RAW_STEMS_DIR
+PROCESSED_DIR = paths.STEMS_T1_DIR
 
 # Standardization settings
 TARGET_SR     = 16000   # 16kHz for BEATs compatibility
@@ -135,7 +140,7 @@ def main():
         total         += count
 
         # Save progress
-        with open(r"D:\raga-spatial-data\verify_summary.json", "w") as f:
+        with open(_os.path.join(paths.DATA_DIR, "verify_summary.json"), "w") as f:
             json.dump(summary, f, indent=2)
 
     print("\n" + "=" * 60)

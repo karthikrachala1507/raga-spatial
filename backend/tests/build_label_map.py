@@ -1,3 +1,9 @@
+# --- run from anywhere: work inside backend/ (see backend/paths.py) ---
+import os as _os, sys as _sys
+_BACKEND = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+_sys.path.insert(0, _BACKEND)
+_os.chdir(_BACKEND)
+
 # Run this on Karthik's machine to generate the correct label map
 # It reads label_dict from the checkpoint and maps /m/ IDs to names
 # using the official YAMNet class map ordering

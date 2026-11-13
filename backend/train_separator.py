@@ -35,14 +35,13 @@ from torch.utils.data import Dataset, DataLoader
 import soundfile as sf
 from tqdm import tqdm
 
+import paths
+
 # Stem-clip pools: each has one sub-folder per category with 10 s, 16 kHz mono WAVs.
 # Tier 1 = FreeSounds + YouTube clips. Tier 2 = open datasets (prepare_datasets.py).
-POOL_DIRS = [
-    r"D:\raga-spatial-data\processed\stems",
-    r"D:\raga-spatial-data\processed\stems_t2",
-]
-MODELS_DIR = r"D:\raga-spatial-data\models"
-LOGS_DIR   = r"D:\raga-spatial-data\logs"
+POOL_DIRS  = [paths.STEMS_T1_DIR, paths.STEMS_T2_DIR]
+MODELS_DIR = paths.MODELS_DIR
+LOGS_DIR   = paths.LOGS_DIR
 
 DEVICE       = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE  = 16000

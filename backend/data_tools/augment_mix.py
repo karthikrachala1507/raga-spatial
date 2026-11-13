@@ -1,3 +1,8 @@
+# --- project paths (see backend/paths.py) ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import paths
+
 # Raga Spatial - augment_mix.py
 # Generates synthetic mixes from collected stems
 # Each mix has 2-6 random stems combined at random volumes
@@ -6,7 +11,8 @@
 # v2: every saved target stem is exactly what went into mix.wav, so the
 # 8 stems sum to the mix. (v1 re-normalised each target to a 0.9 peak, which
 # made targets a median 7 dB louder than their real level in the mix.)
-# v2 mixes go to synthetic_mixes_v2; the v1 folder is left untouched.
+# NOTE: training no longer needs this script. train_separator.py builds its
+# mixes on the fly. This is kept only for making a fixed set of mixes to inspect.
 
 import os
 import sys
@@ -17,8 +23,8 @@ import soundfile as sf
 import librosa
 from tqdm import tqdm
 
-PROCESSED_DIR = r"D:\raga-spatial-data\processed\stems"
-MIXES_DIR     = r"D:\raga-spatial-data\synthetic_mixes_v2"
+PROCESSED_DIR = paths.STEMS_T1_DIR
+MIXES_DIR     = _os.path.join(paths.DATA_DIR, "synthetic_mixes")
 
 # Mix generation settings
 TARGET_SR          = 16000
