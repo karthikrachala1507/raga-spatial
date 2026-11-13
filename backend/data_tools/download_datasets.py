@@ -58,6 +58,8 @@ DATASETS = [
      "files": ["audio_mono-mic.zip"], "keep": keep_wav},
     {"name": "mridangam_tani", "record": 1266207,
      "files": ["mridangam_tani-avarthanam_1.0.zip"], "keep": keep_wav},
+    {"name": "tabla_4way", "record": 7110248,
+     "files": ["4way-tabla-ismir21-dataset.zip"], "keep": keep_wav},
     {"name": "musdb18hq", "record": 3338373,
      "files": ["musdb18hq.zip"], "keep": keep_musdb},
     {"name": "urmp", "record": 5034983,

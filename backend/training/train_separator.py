@@ -78,6 +78,14 @@ STEMS_MIN, STEMS_MAX = 2, 6        # categories per mix
 LEVEL_MIN, LEVEL_MAX = 0.21, 1.0   # level of each stem in the mix
 SECOND_CLIP_PROB     = 0.25        # chance of layering 2 sources in one category
 MAX_CLIPS_WEIGHT     = 30          # cap so very long recordings do not dominate
+ORIGIN_BALANCE       = 0.5         # 1 = a dataset's share follows its size, 0 = all datasets equal
+
+# Coherent mixes: stems that really played together (data_tools\prepare_coherent.py)
+ALIGNED_DIR          = paths.STEMS_ALIGNED_DIR
+COHERENT_PROB        = 0.5         # share of training mixes that are coherent
+COHERENT_EXTRA_PROB  = 0.5         # chance of adding 1-2 unrelated stems the track lacks
+COHERENT_TILT_DB     = 3.0         # random level change per stem within a coherent mix
+N_VAL_COHERENT       = 150         # fixed coherent validation mixes from held-out tracks
 
 CATEGORIES = [
     "percussion", "plucked_strings", "bowed_strings",
@@ -96,6 +104,11 @@ def clip_source(filename):
     return stem.rsplit("_", 1)[0]
 
 
+def clip_origin(source):
+    """Which collection a recording came from: a Tier 2 dataset name, or 'tier1'."""
+    return source.split("__", 1)[0] if "__" in source else "tier1"
+
+
 def is_val_source(source):
     return zlib.crc32(source.encode("utf-8")) % VAL_HOLDOUT_MOD == 0
 
@@ -103,13 +116,64 @@ def is_val_source(source):
 class ClipPool:
     """Index of all clips, grouped category -> source file -> clip paths."""
 
-    def __init__(self, pool_dirs):
-        self.pool_dirs = pool_dirs
+    def __init__(self, pool_dirs, aligned_dir=None):
+        self.pool_dirs   = pool_dirs
+        self.aligned_dir = aligned_dir
         self.train = {}
         self.val   = {}
+        self.coherent_train = {}     # dataset -> list of tracks, each a list of windows
+        self.coherent_val   = []     # windows from held-out tracks
         self.refresh()
 
+    def _scan_aligned(self):
+        """Time-aligned stems: {(dataset, track): {window: [(cat_idx, path, source)]}}."""
+        tracks = {}
+        if not self.aligned_dir or not os.path.isdir(self.aligned_dir):
+            return tracks
+        for cat_idx, cat in enumerate(CATEGORIES):
+            cat_dir = os.path.join(self.aligned_dir, cat)
+            if not os.path.isdir(cat_dir):
+                continue
+            with os.scandir(cat_dir) as entries:
+                for e in entries:
+                    if not e.name.endswith(".wav"):
+                        continue
+                    parts = e.name[:-4].split("__")
+                    if len(parts) != 4:
+                        continue
+                    dataset, track, source, window = parts
+                    tracks.setdefault((dataset, track), {}).setdefault(window, []).append(
+                        (cat_idx, e.path, dataset + "__" + source))
+        return tracks
+
     def refresh(self):
+        # 1. coherent (same song, same moment) material
+        aligned = self._scan_aligned()
+        coherent_train, coherent_val, reserved = {}, [], set()
+        for (dataset, track) in sorted(aligned):
+            windows = aligned[(dataset, track)]
+            if is_val_source("track:" + dataset + "__" + track):
+                # whole track held out: none of its stems may be trained on,
+                # not even as single clips in random mixes
+                for stems in windows.values():
+                    reserved.update(src for _, _, src in stems)
+                if not (dataset + "__").startswith(VAL_EXCLUDE_PREFIXES):
+                    for w in sorted(windows):
+                        stems = sorted((c, p) for c, p, _ in windows[w])
+                        if len({c for c, _ in stems}) >= 2:
+                            coherent_val.append(stems)
+                continue
+            kept = []
+            for w in sorted(windows):
+                stems = sorted((c, p) for c, p, src in windows[w] if not is_val_source(src))
+                if len({c for c, _ in stems}) >= 2:
+                    kept.append(stems)
+            if kept:
+                coherent_train.setdefault(dataset, []).append(kept)
+        self.coherent_train = coherent_train
+        self.coherent_val   = coherent_val
+
+        # 2. single clips for random mixes
         train = {c: {} for c in CATEGORIES}
         val   = {c: {} for c in CATEGORIES}
         for pool_idx, root in enumerate(self.pool_dirs):
@@ -127,13 +191,15 @@ class ClipPool:
                             # out of the fixed validation set
                             if not source.startswith(VAL_EXCLUDE_PREFIXES):
                                 val[cat].setdefault(source, []).append(e.path)
+                        elif source in reserved:
+                            continue          # belongs to a held-out coherent track
                         else:
                             train[cat].setdefault(source, []).append(e.path)
-        self.train = self._index(train)
-        self.val   = self._index(val)
+        self.train = self._index(train, balance_origins=True)
+        self.val   = self._index(val,   balance_origins=False)   # keeps the validation set fixed
 
     @staticmethod
-    def _index(by_cat):
+    def _index(by_cat, balance_origins):
         index = {}
         for cat, sources in by_cat.items():
             names = sorted(sources)
@@ -142,6 +208,18 @@ class ClipPool:
             for n in names:
                 sources[n].sort()
             weights = [min(len(sources[n]), MAX_CLIPS_WEIGHT) ** 0.5 for n in names]
+            if balance_origins:
+                # No single dataset may dominate a stem. Without this, Slakh
+                # (synthesised) supplied 72-95% of five stems simply because it
+                # has the most recordings. Each origin's share is made
+                # proportional to (its number of recordings) ** ORIGIN_BALANCE.
+                origins = [clip_origin(n) for n in names]
+                total, count = {}, {}
+                for o, w in zip(origins, weights):
+                    total[o] = total.get(o, 0.0) + w
+                    count[o] = count.get(o, 0) + 1
+                weights = [w * count[o] ** ORIGIN_BALANCE / total[o]
+                           for o, w in zip(origins, weights)]
             index[cat] = (names, weights, sources)
         return index
 
@@ -162,6 +240,37 @@ def sample_recipe(rng, index):
             path  = rng.choice(sources[source])
             level = rng.uniform(LEVEL_MIN, LEVEL_MAX) / picks ** 0.5
             recipe.append((CATEGORIES.index(cat), path, level))
+    return recipe
+
+
+def sample_coherent(rng, pool):
+    """A mix of instruments that really played together: one track, one moment.
+
+    Every stem of the chosen window is used at its true relative level (a small
+    random tilt per stem adds variety). Half the time, one or two unrelated
+    clips are added for stems the track does not have, because several
+    datasets lack whole categories (Slakh has no vocals, MUSDB has only three).
+    """
+    datasets = sorted(pool.coherent_train)
+    weights  = [len(pool.coherent_train[d]) ** ORIGIN_BALANCE for d in datasets]
+    dataset  = rng.choices(datasets, weights=weights, k=1)[0]
+    window   = rng.choice(rng.choice(pool.coherent_train[dataset]))
+
+    gain   = rng.uniform(0.6, 1.0)
+    tilt   = {}
+    recipe = []
+    for cat_idx, path in window:
+        if cat_idx not in tilt:
+            tilt[cat_idx] = 10 ** (rng.uniform(-COHERENT_TILT_DB, COHERENT_TILT_DB) / 20)
+        recipe.append((cat_idx, path, gain * tilt[cat_idx]))
+
+    if rng.random() < COHERENT_EXTRA_PROB:
+        absent = [c for c in CATEGORIES if c in pool.train and CATEGORIES.index(c) not in tilt]
+        for cat in rng.sample(absent, min(len(absent), rng.randint(1, 2))):
+            names, weights, sources = pool.train[cat]
+            source = rng.choices(names, weights=weights, k=1)[0]
+            recipe.append((CATEGORIES.index(cat), rng.choice(sources[source]),
+                           rng.uniform(LEVEL_MIN, LEVEL_MAX) * 0.5))
     return recipe
 
 
@@ -211,6 +320,8 @@ class TrainMixDataset(Dataset):
             # created on first use, so each DataLoader worker gets its own
             # randomness instead of a copy of the same generator
             self.rng = random.Random()
+        if self.pool.coherent_train and self.rng.random() < COHERENT_PROB:
+            return render_recipe(sample_coherent(self.rng, self.pool))
         return render_recipe(sample_recipe(self.rng, self.pool.train))
 
 
@@ -220,6 +331,24 @@ class ValMixDataset(Dataset):
     def __init__(self, pool, n_items):
         rng = random.Random(SPLIT_SEED)
         self.recipes = [sample_recipe(rng, pool.val) for _ in range(n_items)]
+
+    def __len__(self):
+        return len(self.recipes)
+
+    def __getitem__(self, idx):
+        return render_recipe(self.recipes[idx])
+
+
+class ValCoherentDataset(Dataset):
+    """A fixed list of coherent mixes from held-out TRACKS: real combinations
+    of instruments the model has never heard, at their true balance. This is
+    the closest thing to a real song that can still be scored."""
+
+    def __init__(self, pool, n_items):
+        rng = random.Random(SPLIT_SEED)
+        windows = list(pool.coherent_val)
+        rng.shuffle(windows)
+        self.recipes = [[(c, p, 1.0) for c, p in w] for w in windows[:n_items]]
 
     def __len__(self):
         return len(self.recipes)
@@ -356,7 +485,7 @@ def train():
     print("Device: " + DEVICE + " | mixed precision: " + str(USE_AMP and DEVICE == "cuda"))
     print("=" * 60)
 
-    pool = ClipPool(POOL_DIRS)
+    pool = ClipPool(POOL_DIRS, ALIGNED_DIR)
     if len(pool.train) < 2 or len(pool.val) < 2:
         print("ERROR: not enough stem clips found in:")
         for d in POOL_DIRS:
@@ -374,6 +503,21 @@ def train():
     val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     print("Mixes per epoch: " + str(MIXES_PER_EPOCH) + " (new every epoch) | "
           "fixed validation mixes: " + str(len(val_set)))
+
+    # Coherent mixes: instruments that really played together
+    coherent_loader = None
+    if pool.coherent_train:
+        print("Coherent tracks for training: " + str(
+            {d: len(t) for d, t in sorted(pool.coherent_train.items())})
+            + " (" + str(round(COHERENT_PROB * 100)) + "% of training mixes)")
+    else:
+        print("Coherent mixes: none yet (run data_tools\\prepare_coherent.py). "
+              "Training uses random mixes only.")
+    coherent_set = ValCoherentDataset(pool, N_VAL_COHERENT)
+    if len(coherent_set) >= 20:
+        coherent_loader = DataLoader(coherent_set, batch_size=BATCH_SIZE,
+                                     shuffle=False, num_workers=0)
+        print("Coherent validation mixes from held-out tracks: " + str(len(coherent_set)))
 
     print("\nInitializing band-split RNN (dim " + str(FEATURE_DIM)
           + ", " + str(N_BLOCKS) + " blocks)...")
@@ -449,6 +593,9 @@ def train():
 
         val_loss, pred_rms, level_ratio, val_sdr, sdr_per_cat = evaluate(
             model, val_loader, USE_AMP)
+        song_sdr, song_per_cat = None, {}
+        if coherent_loader is not None:
+            _, _, _, song_sdr, song_per_cat = evaluate(model, coherent_loader, USE_AMP)
         scheduler.step()
 
         lr_now  = optimizer.param_groups[0]["lr"]
@@ -460,6 +607,8 @@ def train():
               + " | train: " + str(round(train_loss, 4)).rjust(8)
               + " | val: "   + str(round(val_loss,   4)).rjust(8)
               + " | SDR: "   + (str(round(val_sdr, 2)) + " dB").rjust(8)
+              + ("" if song_sdr is None else
+                 " | coherent SDR: " + (str(round(song_sdr, 2)) + " dB").rjust(8))
               + " | level: " + str(round(level_ratio, 2)).rjust(5)
               + " | lr: "    + str(round(lr_now, 6))
               + " | " + str(round(minutes)) + " min"
@@ -472,6 +621,8 @@ def train():
             "val_loss":    round(val_loss,   4),
             "val_sdr_db":  round(val_sdr, 2),
             "sdr_per_stem": sdr_per_cat,
+            "coherent_sdr_db": None if song_sdr is None else round(song_sdr, 2),
+            "coherent_sdr_per_stem": song_per_cat,
             "pred_rms":    round(pred_rms, 6),
             "level_ratio": round(level_ratio, 3),
             "lr":          round(float(lr_now), 6),
@@ -484,12 +635,17 @@ def train():
 
         print("          per stem (dB): " + ", ".join(
             c + " " + str(v) for c, v in sdr_per_cat.items()))
+        if song_sdr is not None:
+            print("          coherent, per stem (dB): " + ", ".join(
+                c + " " + str(v) for c, v in song_per_cat.items()))
 
-        # "Best" = best separation in dB. Decided BEFORE saving latest, so a
-        # resume sees the right value.
-        is_best = val_sdr > best_val_sdr
+        # "Best" = best separation in dB, averaged over the random and the
+        # coherent validation sets when both exist. Decided BEFORE saving
+        # latest, so a resume sees the right value.
+        score   = val_sdr if song_sdr is None else (val_sdr + song_sdr) / 2
+        is_best = score > best_val_sdr
         if is_best:
-            best_val_sdr = val_sdr
+            best_val_sdr = score
 
         torch.save({
             "epoch":         epoch,

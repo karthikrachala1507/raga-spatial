@@ -24,12 +24,19 @@ Every one is a direct, no-sign-up download from Zenodo.
 | Medley-solos-DB | 3464194 | 7.9 GB | clarinet, flute, sax, trumpet, violin, piano, guitar, voice | CC BY 4.0 |
 | GuitarSet | 3371780 | 0.7 GB | solo acoustic guitar | CC BY 4.0 |
 | Mridangam Tani-avarthanam | 1266207 | 0.3 GB | solo mridangam | CC BY-NC-ND 4.0 |
+| 4-way Tabla (ISMIR 2021) | 7110248 | 0.2 GB | tabla recorded in isolation | CC BY 4.0 |
 | Slakh2100 (redux) | 4599666 | 104 GB | guitar, bass, piano, organ, synth, strings, brass, reeds, flutes, drums | CC BY 4.0 |
 
 **Licence note.** Saraga, MUSDB18-HQ and the mridangam set are for
 non-commercial use. A model trained on them inherits that limit: fine for
 research, a portfolio or a demo, not for a paid product without replacing
 that data or getting permission.
+
+## Coherent mixes
+
+`backend\data_tools\prepare_coherent.py` cuts the four multitrack datasets (URMP, MUSDB18-HQ,
+Saraga Carnatic, Slakh2100) into time-aligned stems in `processed\stems_aligned\`, so training
+can mix instruments that really played together. See section 7 of the README.
 
 ## Cleaning
 

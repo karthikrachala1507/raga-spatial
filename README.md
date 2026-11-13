@@ -45,10 +45,11 @@ without any other context.
 | 8-stem backend (separation, positions, depth, rendering) | Works end to end. Tested on a 30 s song and a 5 min song. |
 | 8-zone UI with live stem mixer | Works. Checked in a browser. |
 | Training pipeline | Works. Pause and resume are safe. |
-| Training data | 7 open datasets downloaded. Slakh2100 is 71% converted to clips. Folk / texture clips cleaned on 13 Nov. |
-| **8-stem model (v3)** | **Early. 3 of 100 epochs done. Median 1.3 dB.** Only bass (5.5 dB) is in usable range. |
-| Training | **Paused** after epoch 3 (97 epochs left: about 2 days alone). |
+| Training data | 8 open datasets downloaded. Slakh2100 is 71% converted to clips. Folk / texture clips cleaned. Coherent (same-song) stems cut for 1 of 4 multitrack datasets so far. |
+| **8-stem model (v3)** | **Early.** The first run reached a median of 1.3 dB in 3 epochs (bass 5.5 dB). It was set aside on 13 Nov; the next start trains from zero on the corrected data. The app still uses that run's best checkpoint until then. |
+| Training | **Not running.** The next start begins a fresh run: 100 epochs, about 2 days alone. |
 | Slakh conversion | **Paused** at 14,618 of 20,676 stems (71%). About 47 minutes left when run alone. |
+| Coherent cutting | **Paused.** URMP done. MUSDB18-HQ, Saraga and Slakh still to cut: about 2 hours (estimate). |
 
 **The honest summary:** all the software is built and tested. The model that
 does the actual separating has barely started learning, so stems from a real
@@ -91,11 +92,12 @@ cd /d D:\raga-spatial\backend
 | Write the 8 stems of a real song, to listen to | `python training\evaluate_separator.py --song "D:\path\song.mp3"` |
 | Download the open datasets | `python data_tools\download_datasets.py` |
 | Turn downloaded datasets into training clips | `python data_tools\prepare_datasets.py` |
+| Cut multitrack datasets into time-aligned stems | `python data_tools\prepare_coherent.py` |
 | Quick audio checks (about 1 minute) | `python tests\test_8stem.py` |
 | Whole pipeline on the test song | `python tests\test_8stem.py pipeline` |
 
-`download_datasets.py` and `prepare_datasets.py` can be stopped and rerun at
-any time; they skip what is already done. Training picks up new clips at the
+`download_datasets.py`, `prepare_datasets.py` and `prepare_coherent.py` can be
+stopped and rerun at any time; they skip what is already done. Training picks up new clips at the
 start of each epoch.
 
 A finished test result is kept on disk. With the app running, open
@@ -141,6 +143,7 @@ raga-spatial\
 │   │   ├── verify_stems.py        Tier 1: cut raw files into clips
 │   │   ├── download_datasets.py   Tier 2: open datasets from Zenodo
 │   │   ├── prepare_datasets.py    Tier 2: cut datasets into clips
+│   │   ├── prepare_coherent.py    cut multitrack datasets into time-aligned stems
 │   │   ├── clean_folk_texture.py  keeps only folk clips that are percussion
 │   │   └── augment_mix.py         legacy: writes fixed mixes (no longer needed)
 │   ├── tests\                 test_8stem.py, the phase tests, diagnostics, test_song.flac
@@ -157,6 +160,7 @@ raga-spatial\
     ├── datasets\              Tier 2 open datasets, stems only
     ├── processed\stems_t1\    Tier 1 training clips
     ├── processed\stems_t2\    Tier 2 training clips
+    ├── processed\stems_aligned\  same-song, same-moment stems for coherent mixes
     ├── processed\rejected\    clips removed from training (kept, not deleted)
     ├── checkpoints\           trained separator (separator_v3_best.pt is used by the app)
     ├── logs\                  training_log_v1/v2/v3.json, one entry per epoch
@@ -334,17 +338,35 @@ Script: `backend\training\train_separator.py`. Start with `start_training.bat`.
 
 ### How training data is built
 
-Mixes are built **on the fly**. For every training example the script picks
-2 to 6 categories, picks a source recording in each, picks a clip from that
-recording, gives each a random level and adds them up. The target stems are
-exactly what went into the mix.
+Mixes are built **on the fly**, and the target stems are always exactly what
+went into the mix. There are two kinds, used half and half:
+
+- **Random mixes.** Pick 2 to 6 categories, a recording in each, a clip from
+  that recording, a random level for each, and add them up. Every combination
+  is new, but the parts are unrelated: different pieces, keys and tempos.
+- **Coherent mixes.** Take one moment of one real multitrack recording and use
+  the stems that actually played together, at their true balance (each stem's
+  level is nudged by up to 3 dB for variety). Half the time one or two
+  unrelated clips are added for stems that recording lacks, because several
+  datasets have no vocals or only three stems. These mixes are what real
+  songs look like: parts that move together are much harder to pull apart.
+
+Coherent mixes need `data_tools\prepare_coherent.py` to have been run. Until
+then training uses random mixes only and says so when it starts.
 
 - Clips are drawn **per source recording**, not per clip, so a category with
   a few very long recordings does not drown out the others.
+- **No dataset may dominate a stem.** Each dataset's share of a stem follows
+  the square root of its number of recordings. Before this, Slakh, which is
+  synthesised, supplied 72 to 95% of five stems.
 - 10% of source recordings are **held out** and never trained on.
-- Validation uses a fixed, seeded set of 300 mixes built only from held-out
-  recordings, so the score measures real generalisation and is the same
-  after every resume.
+- Validation uses a fixed, seeded set of 300 random mixes built only from
+  held-out recordings, so the score measures real generalisation and is the
+  same after every resume.
+- A second validation set uses **coherent mixes from held-out tracks**
+  (`coherent SDR` in the output). It is the closest thing to a real song
+  that can still be scored. A held-out track is never trained on in any
+  form, not even as single clips.
 - New clips placed in the data folders are picked up at the next epoch.
 
 ### Settings
@@ -371,7 +393,8 @@ line of per-stem dB values. It saves:
 - `separator_v3_epochN.pt`: every 10 epochs
 - `data\logs\training_log_v3.json`: one entry per epoch
 
-"Best" is chosen by separation quality in dB, not by the loss.
+"Best" is chosen by separation quality in dB (the average of the random and
+coherent scores when both exist), not by the loss.
 
 ### Speed
 
@@ -427,6 +450,7 @@ cap per recording).
 | URMP | 12.1 GB | 1,349 | solo bowed strings and wind |
 | GuitarSet | 0.7 GB | 994 | acoustic guitar |
 | Mridangam Tani-avarthanam | 0.3 GB | 376 | solo mridangam |
+| 4-way Tabla (ISMIR 2021) | 0.2 GB | 544 | tabla recorded in isolation |
 
 Tier 2 totals by category:
 
@@ -451,9 +475,44 @@ Notes:
   A model trained on them is fine for research or a demo, not for a paid
   product.
 
+### Time-aligned stems for coherent mixes (`data\processed\stems_aligned`)
+
+Cut by `prepare_coherent.py` from the four datasets that hold the separate
+parts of the same performance. Every stem of a track is cut at the same 10 s
+windows, and all stems of a window share one gain, so their real balance is
+kept. Only windows where at least two different stems are playing are used.
+
+| Dataset | State | Result |
+|---|---|---|
+| URMP | done | 44 pieces read, 78 windows; only 7 pieces mix strings with wind, the rest are one family only |
+| MUSDB18-HQ | not cut yet | vocals + bass + drums of the same song |
+| Saraga Carnatic | not cut yet | voice + violin + mridangam of the same concert |
+| Slakh2100 | not cut yet | up to 900 tracks, about 10 instruments each |
+
+### Audit of 13 November 2026
+
+| Check | Result |
+|---|---|
+| Broken clips (250 per stem per tier) | none unreadable, wrong rate, wrong length or silent |
+| Mix equals the sum of its target stems | yes, to within 0.0000002 |
+| Recordings shared by training and validation | 0 |
+| Hours per stem | percussion 58, vocals 59, keys 46, plucked 42, bowed 30, bass 22, wind 20, **folk 4.5** |
+| Who supplied each stem before balancing | Slakh: keys 95%, plucked 89%, wind 82%, bass 82%, bowed 72%, percussion 60% |
+| After balancing | real recordings: percussion 65%, bowed 48%, wind 42%, plucked 38%, bass 35%, keys 22% |
+| Wrong content, by the detector | Tier 1 percussion: a voice in 15% of clips, no percussion heard in 27%. The clean datasets: 0 to 3%. |
+
+The detector cannot judge two things: it mistakes bowed strings for voices
+(92% of clean solo violin clips), and it misses Carnatic singing (voice heard
+in only 17% of Saraga vocal clips). A check of the vocal clips with
+MelBandRoformer was started and stopped unfinished after 45 minutes.
+
 ### Still missing
 
-- `folk_texture`: no open dataset exists for dappu, parai or dhol.
+- `folk_texture`: no open dataset exists for dappu, parai or dhol. It has
+  4.5 hours from 48 recordings, by far the least.
+- A search of Zenodo on 13 November found no open stem data for bansuri,
+  nadaswaram, shehnai, veena, sitar or harmonium. The only usable find was
+  the isolated tabla set, which was added.
 - Veena, nadaswaram, thavil, bansuri and harmonium have no clean multitrack
   data. Clean solo recordings of these would help the most.
 
@@ -510,9 +569,17 @@ information. v3 uses the published design that v2 was loosely based on.
 | 2 | 1.32 | 5.27 | 2.68 | 2.31 | 1.98 | 1.00 | 0.51 | 0.37 | 0.13 |
 | 3 | 1.28 | 5.49 | 2.75 | 2.50 | 1.89 | 0.68 | 0.43 | 0.29 | 0.12 |
 
-Training loss is still falling (0.193, 0.178, 0.167). The median stalled
+Training loss was still falling (0.193, 0.178, 0.167). The median stalled
 between epochs 2 and 3. Three epochs are too few to conclude anything;
-percussion, bowed strings and keys have not started to separate.
+percussion, bowed strings and keys had not started to separate.
+
+**This first run was set aside on 13 November.** Since it started, the
+training data changed in four ways (folk clips cleaned, datasets balanced,
+tabla added, coherent mixes added), and the model had learned to put whole
+songs into Folk / Texture. Its resume file is kept in
+`data\checkpoints\v3_run1\` and its log in `data\logs\training_log_v3_run1.json`.
+The next start trains from zero. Until its first epoch finishes, the app
+keeps using the old run's `separator_v3_best.pt`.
 
 ---
 
@@ -597,6 +664,12 @@ The project then sat untouched for five months.
    verified; this README written.
 8. The Folk / Texture problem diagnosed and the clips cleaned: 1,612 kept,
    6,551 moved out of training.
+9. Full data audit. Sampler changed so no dataset dominates a stem; isolated
+   tabla recordings added; a crash on short audio fixed.
+10. Coherent mixes added: a tool that cuts multitrack datasets in matching
+    time windows, a second validation set from held-out tracks, and a
+    sampler that uses coherent mixes for half of training. Tested on URMP.
+11. The first v3 run set aside so the next start trains on the corrected data.
 
 ### Commits
 
@@ -632,6 +705,8 @@ The project then sat untouched for five months.
 | GPU memory over the limit (6.8 of 6.4 GB) | full-precision 144M model | Mixed precision; v3 is also far smaller. |
 | Epochs slow (3.9 s per step) | reading clips from a busy disk in the main process | Data worker processes. |
 | v2 learned only bass | bottleneck in the network design | v3: standard band-split RNN. |
+| One synthesised dataset supplied 72-95% of five stems | sampling followed the number of recordings, and Slakh has the most | Each dataset's share now follows the square root of its size. |
+| Training mixes were correct but not musical | every mix combined unrelated clips | Half the mixes are now coherent: one moment of one real multitrack recording. |
 | Half-written checkpoint or clip could be read | files written in place | Written to a temporary name, then renamed. |
 
 ### App and audio
@@ -647,6 +722,7 @@ The project then sat untouched for five months.
 | Motion coverage showed 138% | overlapping events on two stems were summed | Overlapping time is counted once. |
 | BEATs reloaded for every stem | no caching | Loaded once and reused. |
 | Results lost after a server restart | job list only in memory | Results and downloads fall back to the files on disk. |
+| 2-stem separator crashed on audio shorter than 16 s | the model returns slightly fewer samples than it is given | The output is padded to the input length. |
 
 ### Data collection
 
@@ -822,11 +898,15 @@ In order:
 1. ~~Decide the Folk / Texture question~~ Done on 13 November: the clips
    were cleaned ([section 14](#14-the-folk--texture-problem)). What remains is
    to confirm it after about 10 epochs of training.
-2. **Finish the Slakh conversion**: `python data_tools\prepare_datasets.py`
-   (1 to 2 hours, run alone).
-3. **Resume training**: `start_training.bat`. About 30 minutes per epoch
-   alone, so about 2 days for the remaining 97 epochs. 100 is a ceiling;
-   check the score every 10 epochs.
+2. **Finish preparing the data and train**: double-click
+   `start_data_then_training.bat`. It runs three steps in order: the Slakh
+   conversion (about 47 minutes), the coherent cutting (about 2 hours,
+   estimated), then training from zero (about 30 minutes per epoch alone, so
+   about 2 days for 100 epochs). 100 is a ceiling; check the scores every 10
+   epochs.
+3. **Watch the coherent score.** It is the number closest to real-song
+   quality. If it stays far below the random score, the model is still
+   learning the easy problem.
 4. **Listen.** Run `evaluate_separator.py` on real songs every 10 epochs and
    listen to each stem.
 5. **Run a real song through the app in hybrid mode** with training paused.

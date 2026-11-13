@@ -49,6 +49,7 @@ SETTINGS = {
     "urmp":            {"max_clips": 12, "rel_level": 0.25},
     "guitarset":       {"max_clips": 3,  "rel_level": 0.25},
     "mridangam_tani":  {"max_clips": 60, "rel_level": 0.25},
+    "tabla_4way":      {"max_clips": 8,  "rel_level": 0.25},
     "slakh2100":       {"max_clips": 4,  "rel_level": 0.25},
     "medley_solos":    {"max_clips": 12, "rel_level": 0.0},
 }
@@ -193,6 +194,12 @@ def list_tani(root):
         yield path, safe_id(os.path.basename(path)[:-4]), "percussion"
 
 
+def list_tabla(root):
+    """Tabla recorded in isolation: solo compositions and accompaniment parts."""
+    for path in walk(root, (".wav",)):
+        yield path, safe_id(os.path.basename(path)[:-4]), "percussion"
+
+
 def slakh_category(program, is_drum):
     """General MIDI program number -> our category (None = skip)."""
     if is_drum:
@@ -289,6 +296,7 @@ LISTERS = {
     "urmp":            list_urmp,
     "guitarset":       list_guitarset,
     "mridangam_tani":  list_tani,
+    "tabla_4way":      list_tabla,
     "slakh2100":       list_slakh,
 }
 

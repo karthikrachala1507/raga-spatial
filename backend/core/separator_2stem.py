@@ -103,7 +103,13 @@ def run_separation(model, audio_tensor, sr):
             vocals_tensor = model(audio_tensor)
             orig_len      = total_samples
             vocals        = vocals_tensor.squeeze(0).cpu().numpy()
+            if vocals.ndim == 3:
+                vocals    = vocals[0]
             vocals        = vocals[:, :orig_len]
+            # The model returns slightly fewer samples than it was given.
+            # Pad the tail with silence so songs under 16 s do not crash.
+            if vocals.shape[-1] < orig_len:
+                vocals    = np.pad(vocals, ((0, 0), (0, orig_len - vocals.shape[-1])))
             original      = audio_tensor.squeeze(0).cpu().numpy()
             instrumental  = original - vocals
             return vocals, instrumental
