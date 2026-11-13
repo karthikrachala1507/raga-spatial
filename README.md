@@ -47,8 +47,8 @@ without any other context.
 | Training pipeline | Works. Pause and resume are safe. |
 | Training data | 7 open datasets downloaded. Slakh2100 is 65% converted to clips. Folk / texture clips cleaned on 13 Nov. |
 | **8-stem model (v3)** | **Early. 3 of 100 epochs done. Median 1.3 dB.** Only bass (5.5 dB) is in usable range. |
-| Training | **Paused** after epoch 3. Nothing is running. |
-| Slakh conversion | **Paused** at 13,368 of 20,676 stems. |
+| Training | Resumes from epoch 4 automatically once the Slakh conversion finishes (started 13 Nov, 12:46, with `start_data_then_training.bat`). |
+| Slakh conversion | Running since 13 Nov, 12:46. It was at 13,368 of 20,676 stems when resumed; about an hour alone. |
 
 **The honest summary:** all the software is built and tested. The model that
 does the actual separating has barely started learning, so stems from a real
@@ -75,6 +75,7 @@ The two things done most often need no terminal:
 |---|---|
 | Start the app | double-click `start_app.bat`, then use `http://localhost:3000` |
 | Start or resume training | double-click `start_training.bat` |
+| Finish preparing data, then train | double-click `start_data_then_training.bat` (use this while datasets are still being converted) |
 | Pause training | Ctrl+C in its window. It resumes from the last finished epoch. |
 
 For everything else, open a terminal and go to the backend folder first:
@@ -110,6 +111,7 @@ Everything lives in one folder, `D:\raga-spatial`.
 raga-spatial\
 ├── start_app.bat              double-click: starts the app and opens the browser
 ├── start_training.bat         double-click: start or resume training
+├── start_data_then_training.bat   finish converting datasets, then train
 ├── README.md                  this file
 ├── DATASETS.md                dataset sources and licences
 │
