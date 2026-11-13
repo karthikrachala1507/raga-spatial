@@ -45,15 +45,16 @@ without any other context.
 | 8-stem backend (separation, positions, depth, rendering) | Works end to end. Tested on a 30 s song and a 5 min song. |
 | 8-zone UI with live stem mixer | Works. Checked in a browser. |
 | Training pipeline | Works. Pause and resume are safe. |
-| Training data | 7 open datasets downloaded. Slakh2100 is 65% converted to clips. |
+| Training data | 7 open datasets downloaded. Slakh2100 is 65% converted to clips. Folk / texture clips cleaned on 13 Nov. |
 | **8-stem model (v3)** | **Early. 3 of 100 epochs done. Median 1.3 dB.** Only bass (5.5 dB) is in usable range. |
 | Training | **Paused** after epoch 3. Nothing is running. |
 | Slakh conversion | **Paused** at 13,368 of 20,676 stems. |
 
 **The honest summary:** all the software is built and tested. The model that
 does the actual separating has barely started learning, so stems from a real
-song still have heavy bleed. It needs days of training, and one data problem
-([section 14](#14-the-folk--texture-problem)) should be settled first.
+song still have heavy bleed. It needs days of training. One data problem
+([section 14](#14-the-folk--texture-problem)) was fixed on 13 November; the
+model has not been trained on the cleaned data yet, so the fix is unproven.
 
 **How to read the dB numbers** (SDR, explained in the [glossary](#18-glossary)):
 
@@ -138,6 +139,7 @@ raga-spatial\
 │   │   ├── verify_stems.py        Tier 1: cut raw files into clips
 │   │   ├── download_datasets.py   Tier 2: open datasets from Zenodo
 │   │   ├── prepare_datasets.py    Tier 2: cut datasets into clips
+│   │   ├── clean_folk_texture.py  keeps only folk clips that are percussion
 │   │   └── augment_mix.py         legacy: writes fixed mixes (no longer needed)
 │   ├── tests\                 test_8stem.py, the phase tests, diagnostics, test_song.flac
 │   ├── models\                MelBandRoformer, BEATs and HRTF files used by the app
@@ -153,6 +155,7 @@ raga-spatial\
     ├── datasets\              Tier 2 open datasets, stems only
     ├── processed\stems_t1\    Tier 1 training clips
     ├── processed\stems_t2\    Tier 2 training clips
+    ├── processed\rejected\    clips removed from training (kept, not deleted)
     ├── checkpoints\           trained separator (separator_v3_best.pt is used by the app)
     ├── logs\                  training_log_v1/v2/v3.json, one entry per epoch
     ├── real_songs\            full songs for listening tests (test5.mp3)
@@ -396,13 +399,16 @@ and `download_youtube.py` ("solo" searches), then cut with `verify_stems.py`
 | keys_synth | 203 | 423 | 159 |
 | vocals | 107 | 15,698 | 86 |
 | bass | 207 | 268 | 104 |
-| folk_texture | 93 | 8,163 | 84 |
-| **Total** | **1,438** | **34,674** | **812** |
+| folk_texture | 93 | 1,612 (was 8,163) | 48 (was 84) |
+| **Total** | **1,438** | **28,123** | **776** |
 
 Weaknesses: clip counts are inflated by overlapping windows from few long
 recordings; YouTube "solos" often contain accompaniment; FreeSounds previews
-are lossy. The `folk_texture` clips are a special problem
-([section 14](#14-the-folk--texture-problem)).
+are lossy. The `folk_texture` clips were whole songs; 6,551 of them were
+moved out of training on 13 November
+([section 14](#14-the-folk--texture-problem)). The other categories have not
+been checked the same way: a sample of Tier 1 percussion clips had a voice in
+8% of them.
 
 ### Tier 2: open datasets (`data\processed\stems_t2`)
 
@@ -524,6 +530,7 @@ Every number here was measured, not estimated.
 | Does the moving-source renderer add tremolo? | envelope ripple of moving vs static noise | 0.112 vs 0.114: none. |
 | Do the 8 stems add back up to the song? | sum of stems minus input | Largest difference 0.0002 on a full-scale signal. |
 | What do real songs look like to the epoch 2 model? | `test5.mp3` (5 min) | folk_texture 64%, bass 21%, vocals 7.5%, everything else under 5%. See [section 14](#14-the-folk--texture-problem). |
+| What is inside the folk_texture clips? | BEATs on all 8,163 clips | 20% clean percussion; 13% percussion with a voice or melody; 27% voice or melody without percussion; 35% nothing musical recognised; 5% weak percussion. |
 | How long does the app take? | epoch 2 model on the GPU | 30 s song: 26 s for the whole pipeline. 5 min song: 29 s to separate and write the 8 stems. |
 
 ---
@@ -586,6 +593,8 @@ The project then sat untouched for five months.
    was deleted after a file-by-file comparison.
 7. Files and folders renamed for clarity; every reference updated and
    verified; this README written.
+8. The Folk / Texture problem diagnosed and the clips cleaned: 1,612 kept,
+   6,551 moved out of training.
 
 ### Commits
 
@@ -647,6 +656,7 @@ The project then sat untouched for five months.
 | yt-dlp downloaded few clips | a strict duration filter silently rejected most | Filter removed, more results per query. |
 | Slakh "first 700 tracks" gave incomplete tracks | files in the archive are not grouped by track | Download the whole archive (resumable), extract stems only, delete the archive. |
 | FreeSounds key in git | hardcoded in `collect_stems.py` | Moved to `backend\.env`. **The old key is still in git history and must be rotated.** |
+| Real songs landed mostly in the Folk / Texture stem | that category's clips were whole folk songs, found by searches such as "Telugu folk music" | `clean_folk_texture.py` keeps only clips the detector confirms as percussion without voice or melody. |
 
 ### Environment and tooling
 
@@ -669,7 +679,7 @@ The project then sat untouched for five months.
 | # | Problem | Detail |
 |---|---|---|
 | 1 | **The model is barely trained** | 3 epochs. Median 1.3 dB. Percussion, bowed strings and keys are near 0 dB. Needs days. There is no guarantee how far it will get. |
-| 2 | **Folk / texture swallows real songs** | [Section 14](#14-the-folk--texture-problem). |
+| 2 | **Folk / texture swallowed real songs** | Data cleaned on 13 Nov ([section 14](#14-the-folk--texture-problem)). Not yet confirmed by training: the epoch 3 checkpoint still has the old habit. |
 | 3 | Nobody has listened yet | Every quality claim in this file is a measurement. The stems need human ears. |
 | 4 | Hybrid mode not run with the real MelBandRoformer | It was tested with stand-in vocal files only, because MelBandRoformer and training together overfill the GPU. Pause training before processing a song in hybrid mode. |
 | 5 | Slakh conversion unfinished | 7,308 stems left; about 1 to 2 hours alone. |
@@ -686,7 +696,10 @@ The project then sat untouched for five months.
 
 ## 14. The Folk / Texture problem
 
-### What happens
+**State: the data was cleaned on 13 November 2026. The effect on the model
+is not yet measured.**
+
+### What happened
 
 When the epoch 2 model splits a real song, most of the song lands in the
 Folk / Texture stem.
@@ -734,30 +747,69 @@ A second, smaller problem sits underneath: even with perfect data, dappu,
 parai and dhol are drums. Asking a model to tell "folk drum" from "drum" is
 asking it to split one kind of sound into two stems.
 
-### Why it matters before the next long run
-
-Training for days with this data teaches the wrong lesson more firmly. Every
-hour spent now is partly spent learning to dump songs into one stem. The
-fix is cheap today (3 epochs, under 4 hours of training would be affected)
-and expensive later.
-
-### Options
+### The options that were considered
 
 | Option | What changes | Cost | Risk |
 |---|---|---|---|
-| **A. Clean the folk clips** | Keep only folk clips where the detector hears percussion and no voice (at most about 40% of them). Stem 8 becomes "folk percussion". | A script and an hour. Training resumes from epoch 3. | Folk and percussion stems will blur into each other, because they are the same kind of sound. |
-| **B. Drop the stem** | 7 stems. Dappu, parai and dhol go to Percussion. | Restart training from zero (3 epochs lost). Small changes to the layout and UI. | Loses the separate folk zone that was part of the original design. |
-| **C. Make it an honest "everything else" stem** | Rename stem 8 to "Other / texture" and feed it only sounds that belong in no other category. | Needs suitable data, which does not exist yet. | Without data it stays a dumping ground. |
-| **D. Leave it** | Nothing. | None. | The problem above, trained in harder. |
+| **A. Clean the folk clips (chosen)** | Keep only folk clips where the detector hears percussion and no voice or melody. Stem 8 becomes "folk percussion". | A script and an hour. Training resumes from epoch 3. | Folk and percussion stems will blur into each other, because they are the same kind of sound. |
+| B. Drop the stem | 7 stems. Dappu, parai and dhol go to Percussion. | Restart training from zero. Small changes to the layout and UI. | Loses the separate folk zone that was part of the original design. |
+| C. Make it an honest "everything else" stem | Rename stem 8 and feed it only sounds that belong in no other category. | Needs data that does not exist yet. | Without data it stays a dumping ground. |
+| D. Leave it | Nothing. | None. | The problem above, trained in harder. |
 
-### Recommendation
+### What was done (13 November 2026)
 
-Do **A** first. It needs no change to the model, keeps the 8-zone design, and
-removes the main cause (whole songs labelled as one stem). Check the result
-after about 10 epochs with `python training\evaluate_separator.py`: if
-Folk / Texture still takes a large share of real songs, switch to **B**.
+The project owner chose option A. `backend\data_tools\clean_folk_texture.py`
+ran BEATs over all 8,163 clips and sorted them:
 
-This is a decision for the project owner. Nothing has been changed yet.
+| Group | Clips | Share | Decision |
+|---|---|---|---|
+| Percussion, no voice, no melody | 1,612 | 20% | **kept** |
+| Percussion with a voice or a melodic instrument | 1,057 | 13% | removed |
+| Voice or melody, no percussion | 2,187 | 27% | removed |
+| Nothing musical recognised (generic "Music", ambient and animal sounds) | 2,876 | 35% | removed |
+| Weak percussion only | 431 | 5% | removed |
+
+A sample of the kept clips was checked: the detector hears "Percussion" in
+100% of them and "Drum" in 93%.
+
+The rule: a clip is kept when its percussion score is at least 0.20, its
+voice score at most 0.10 and its melodic score at most 0.15. A score is the
+highest BEATs probability for that family in any 4-second window of the clip.
+The thresholds are constants at the top of the script.
+
+Result: Folk / texture now has **1,612 clips from 48 recordings** (was 8,163
+from 84). Training uses 1,437 clips from 44 of those recordings; 4 recordings
+are held out for validation.
+
+**Nothing was deleted.** The 6,551 removed clips are in
+`data\processed\rejected\folk_texture\`. To undo:
+
+```cmd
+python data_tools\clean_folk_texture.py --restore
+```
+
+To re-apply after changing the thresholds: `python data_tools\clean_folk_texture.py --apply`.
+The scores are saved in `data\processed\folk_texture_scores.json`, so reruns
+take seconds.
+
+### What is not known yet
+
+- **Whether it worked.** The epoch 3 checkpoint was trained on the old clips
+  and still puts songs into Folk / Texture. It has to be trained further on
+  the cleaned data. Check after about 10 epochs with
+  `python training\evaluate_separator.py`: Folk / Texture should hold a small
+  share of a real song. If it still holds a large share, switch to option B.
+- **Scores before and after are not directly comparable.** The validation set
+  includes held-out folk recordings, and three of the seven were removed
+  entirely. Epoch 4 onward is scored on a slightly different set from
+  epochs 1 to 3.
+- **Folk and percussion will overlap.** A dappu and a drum kit are the same
+  kind of sound. Expect the two stems to share material.
+- **Some good clips were probably lost.** BEATs does not know dappu or parai
+  by name. Clips where it recognised nothing (35%) may include real folk
+  instruments it could not identify.
+- **The other Tier 1 categories were not checked.** A sample of Tier 1
+  percussion clips had a voice in 8% of them. The same tool could be adapted.
 
 ---
 
@@ -765,7 +817,9 @@ This is a decision for the project owner. Nothing has been changed yet.
 
 In order:
 
-1. **Decide the Folk / Texture question** ([section 14](#14-the-folk--texture-problem)).
+1. ~~Decide the Folk / Texture question~~ Done on 13 November: the clips
+   were cleaned ([section 14](#14-the-folk--texture-problem)). What remains is
+   to confirm it after about 10 epochs of training.
 2. **Finish the Slakh conversion**: `python data_tools\prepare_datasets.py`
    (1 to 2 hours, run alone).
 3. **Resume training**: `start_training.bat`. About 30 minutes per epoch

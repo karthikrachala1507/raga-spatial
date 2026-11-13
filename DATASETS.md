@@ -31,6 +31,14 @@ non-commercial use. A model trained on them inherits that limit: fine for
 research, a portfolio or a demo, not for a paid product without replacing
 that data or getting permission.
 
+## Cleaning
+
+The Tier 1 `folk_texture` clips were cut from whole folk songs. On 13 November 2026
+`backend\data_tools\clean_folk_texture.py` kept the 1,612 clips (of 8,163) that the BEATs
+detector confirms as percussion without a voice or melody, and moved the other 6,551 to
+`processed\rejected\folk_texture\`. Nothing was deleted; `--restore` moves them back.
+Details are in section 14 of the README.
+
 ## Still thin
 
 - `folk_texture` (dappu, parai, dhol, kombu) has no open dataset; it relies on

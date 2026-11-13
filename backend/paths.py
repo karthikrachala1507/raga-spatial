@@ -18,6 +18,7 @@ DATA_DIR    = os.environ.get("RAGA_DATA_DIR", os.path.join(PROJECT_DIR, "data"))
 RAW_STEMS_DIR   = os.path.join(DATA_DIR, "raw_stems")              # Tier 1 raw downloads
 STEMS_T1_DIR    = os.path.join(DATA_DIR, "processed", "stems_t1")  # Tier 1 clips (FreeSounds, YouTube)
 STEMS_T2_DIR    = os.path.join(DATA_DIR, "processed", "stems_t2")  # Tier 2 clips (open datasets)
+REJECTED_DIR    = os.path.join(DATA_DIR, "processed", "rejected")  # clips removed from training (kept, not deleted)
 DATASETS_DIR    = os.path.join(DATA_DIR, "datasets")               # open datasets, stems only
 CHECKPOINTS_DIR = os.path.join(DATA_DIR, "checkpoints")            # separator checkpoints from training
 LOGS_DIR        = os.path.join(DATA_DIR, "logs")                   # training logs
