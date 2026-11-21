@@ -50,6 +50,7 @@ SETTINGS = {
     "guitarset":       {"max_clips": 3,  "rel_level": 0.25},
     "mridangam_tani":  {"max_clips": 60, "rel_level": 0.25},
     "tabla_4way":      {"max_clips": 8,  "rel_level": 0.25},
+    "saraga_audiovisual": {"max_clips": 24, "rel_level": 0.50},
     "slakh2100":       {"max_clips": 4,  "rel_level": 0.25},
     "medley_solos":    {"max_clips": 12, "rel_level": 0.0},
 }
@@ -158,6 +159,20 @@ def list_saraga(root):
         track, kind = base.rsplit(".multitrack-", 1)
         if kind in kinds:
             yield path, safe_id(track)[:60] + "-" + kind, kinds[kind]
+
+
+def list_saraga_av(root):
+    """Saraga Audiovisual: <artist>/<piece>/<piece>.multitrack-<part>.wav"""
+    kinds = {"vocal": "vocals", "violin": "bowed_strings",
+             "mridangam-left": "percussion", "ghatam": "percussion"}
+    for path in walk(root, (".wav",)):
+        base = os.path.basename(path)[:-4]
+        if ".multitrack-" not in base:
+            continue
+        _, kind = base.rsplit(".multitrack-", 1)
+        if kind in kinds:
+            rel = os.path.relpath(os.path.dirname(path), root)
+            yield path, safe_id(rel)[:70] + "-" + kind, kinds[kind]
 
 
 def list_musdb(root):
@@ -297,6 +312,7 @@ LISTERS = {
     "guitarset":       list_guitarset,
     "mridangam_tani":  list_tani,
     "tabla_4way":      list_tabla,
+    "saraga_audiovisual": list_saraga_av,
     "slakh2100":       list_slakh,
 }
 

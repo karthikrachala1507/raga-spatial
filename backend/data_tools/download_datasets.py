@@ -41,6 +41,70 @@ def keep_urmp(name):
     return base.startswith("AuSep_") and base.lower().endswith(".wav")
 
 
+def keep_saraga_av(name):
+    n = name.lower()
+    return ".multitrack-" in n and n.endswith(".wav") and "mridangam-right" not in n
+
+
+class RangeFile(__import__("io").RawIOBase):
+    """Read a remote file in pieces, so a zip can be opened without downloading it."""
+
+    def __init__(self, url):
+        r = requests.head(url, allow_redirects=True, timeout=60)
+        self.url, self.size, self.pos = url, int(r.headers["Content-Length"]), 0
+        self.s = requests.Session()
+
+    def seekable(self):
+        return True
+
+    def readable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
+        return self.pos
+
+    def readinto(self, b):
+        n = min(len(b), self.size - self.pos)
+        if n <= 0:
+            return 0
+        r = self.s.get(self.url, headers={"Range": "bytes=%d-%d" % (self.pos, self.pos + n - 1)}, timeout=120)
+        r.raise_for_status()
+        b[:len(r.content)] = r.content
+        self.pos += len(r.content)
+        return len(r.content)
+
+
+def extract_remote_zip(url, root, keep):
+    """Extract only the wanted members of a remote zip. Resumable: finished files are skipped."""
+    import io as _io
+    z = zipfile.ZipFile(_io.BufferedReader(RangeFile(url), 8 * CHUNK))
+    todo = [i for i in z.infolist() if not i.is_dir() and keep(i.filename)]
+    log("    %d wanted files, %.1f GB to read" % (len(todo), sum(i.file_size for i in todo) / 1e9))
+    done = 0
+    for info in todo:
+        target = safe_target(root, info.filename)
+        if target is None or (os.path.exists(target) and os.path.getsize(target) == info.file_size):
+            done += 1
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with z.open(info) as src, open(target + ".part", "wb") as dst:
+            for block in iter(lambda: src.read(CHUNK), b""):
+                dst.write(block)
+        os.replace(target + ".part", target)
+        done += 1
+        if done % 20 == 0:
+            log("    %d / %d files" % (done, len(todo)))
+    return done
+
+
+def keep_audio(name):
+    return name.lower().endswith((".mp3", ".wav", ".flac"))
+
+
 def keep_wav(name):
     return name.lower().endswith(".wav")
 
@@ -54,6 +118,10 @@ def keep_slakh(name):
 DATASETS = [
     {"name": "saraga_carnatic", "record": 4301737,
      "files": ["saraga1.5_carnatic.zip"], "keep": keep_saraga},
+    {"name": "saraga_hindustani", "record": 4301737,
+     "files": ["saraga1.5_hindustani.zip"], "keep": keep_audio},
+    {"name": "saraga_audiovisual", "record": 17405610,
+     "files": ["saraga audio.zip"], "keep": keep_saraga_av, "remote_zip": True},
     {"name": "guitarset", "record": 3371780,
      "files": ["audio_mono-mic.zip"], "keep": keep_wav},
     {"name": "mridangam_tani", "record": 1266207,
@@ -206,6 +274,21 @@ def fetch(ds):
             log(ds["name"] + ": file not found on Zenodo: " + key)
             return False
         info = files[key]
+
+        if ds.get("remote_zip"):
+            log("%s: reading only the wanted stems from %s (%.1f GB archive)" % (
+                ds["name"], key, info["size"] / 1e9))
+            for attempt in range(1, 31):
+                try:
+                    extract_remote_zip(info["url"], root, ds["keep"])
+                    break
+                except Exception as e:
+                    log("    connection problem (%s), retry %d" % (type(e).__name__, attempt))
+                    time.sleep(min(60, 5 * attempt))
+            else:
+                log(ds["name"] + ": did not finish; rerun to resume")
+                return False
+            continue
 
         if ds.get("stream"):
             log("%s: streaming %s (%.1f GB total, keeping first %d tracks)" % (

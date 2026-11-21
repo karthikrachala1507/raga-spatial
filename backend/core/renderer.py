@@ -228,7 +228,11 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     _progress(2, "Separating into 8 stems...")
     t = time.time()
     models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-    want_hybrid = (os.environ.get("RAGA_SEP8_MODE", "hybrid") != "pure"
+    # Default is "pure". Hybrid mode (MelBandRoformer vocals) is off unless asked
+    # for: that checkpoint loads with 842 missing weights, and its vocals do not
+    # add back up to the song (error 0.15). The custom model's own vocals reach
+    # 6.5 dB on coherent mixes.
+    want_hybrid = (os.environ.get("RAGA_SEP8_MODE", "pure") == "hybrid"
                    and os.path.exists(os.path.join(models_dir, "MelBandRoformer.ckpt")))
     two_stem = {}
     if want_hybrid:

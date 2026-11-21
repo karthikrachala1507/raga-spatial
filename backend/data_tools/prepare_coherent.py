@@ -47,6 +47,7 @@ SETTINGS = {
     "musdb18hq":       {"max_windows": 12, "max_tracks": None},
     "saraga_carnatic": {"max_windows": 16, "max_tracks": None},
     "slakh2100":       {"max_windows": 6,  "max_tracks": 900},
+    "saraga_audiovisual": {"max_windows": 16, "max_tracks": None},
 }
 MIN_REL_DB = -40.0     # a stem this far below the window's mix counts as absent
 
@@ -91,6 +92,22 @@ def tracks_saraga(root):
         yield track, groups[track]
 
 
+def tracks_saraga_av(root):
+    kinds = {"vocal": "vocals", "violin": "bowed_strings",
+             "mridangam-left": "percussion", "ghatam": "percussion"}
+    groups = {}
+    for path in pd.walk(root, (".wav",)):
+        base = os.path.basename(path)[:-4]
+        if ".multitrack-" not in base:
+            continue
+        _, kind = base.rsplit(".multitrack-", 1)
+        if kind in kinds:
+            track = pd.safe_id(os.path.relpath(os.path.dirname(path), root))[:70]
+            groups.setdefault(track, []).append((path, track + "-" + kind, kinds[kind]))
+    for track in sorted(groups):
+        yield track, groups[track]
+
+
 def tracks_slakh(root):
     import yaml
     for meta_path in pd.walk(root, ("metadata.yaml",)):
@@ -117,6 +134,7 @@ LISTERS = {
     "musdb18hq": tracks_musdb,
     "saraga_carnatic": tracks_saraga,
     "slakh2100": tracks_slakh,
+    "saraga_audiovisual": tracks_saraga_av,
 }
 
 

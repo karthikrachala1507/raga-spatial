@@ -45,11 +45,11 @@ without any other context.
 | 8-stem backend (separation, positions, depth, rendering) | Works end to end. Tested on a 30 s song and a 5 min song. |
 | 8-zone UI with live stem mixer | Works. Checked in a browser. |
 | Training pipeline | Works. Pause and resume are safe. |
-| Training data | 8 open datasets downloaded. Slakh2100 is 71% converted to clips. Folk / texture clips cleaned. Coherent (same-song) stems cut for 1 of 4 multitrack datasets so far. |
-| **8-stem model (v3)** | **Early.** The first run reached a median of 1.3 dB in 3 epochs (bass 5.5 dB). It was set aside on 13 Nov; the next start trains from zero on the corrected data. The app still uses that run's best checkpoint until then. |
-| Training | **Not running.** The next start begins a fresh run: 100 epochs, about 2 days alone. |
-| Slakh conversion | **Paused** at 14,618 of 20,676 stems (71%). About 47 minutes left when run alone. |
-| Coherent cutting | **Paused.** URMP done. MUSDB18-HQ, Saraga and Slakh still to cut: about 2 hours (estimate). |
+| Training data | 9 open datasets (incl. Saraga Audiovisual) plus the older FreeSounds/YouTube clips; all converted. Folk / texture clips cleaned. Coherent (same-song) stems cut for all 5 multitrack datasets. |
+| **8-stem model (v3)** | **Trained: 100 of 100 epochs (finished 18 Nov).** Best checkpoint epoch 93: random mixes 3.50 dB, coherent mixes 6.62 dB. Five stems are at 6 dB or better on coherent mixes; keys is weak (1.5 dB). Not studio quality. |
+| Training | **Finished.** Nothing is running. |
+| Slakh conversion | Done (20,676 of 20,676 stems). |
+| Coherent cutting | Done for URMP, MUSDB18-HQ, Saraga Carnatic, Slakh (900 tracks) and Saraga Audiovisual. |
 
 **The honest summary:** all the software is built and tested. The model that
 does the actual separating has barely started learning, so stems from a real
@@ -201,11 +201,14 @@ binaural mix (WAV) + one binaural file per stem (MP3) + 8 dry stems (WAV) + JSON
 
 **Step 2 in detail.** There are two modes:
 
-- **hybrid (default):** MelBandRoformer extracts the vocals, which it does
-  far better than the custom model. The custom model then splits the
-  remaining instrumental into the other 7 stems.
-- **pure:** all 8 stems come from the custom model. Set the environment
-  variable `RAGA_SEP8_MODE=pure`.
+- **pure (default):** all 8 stems come from the custom model.
+- **hybrid:** MelBandRoformer extracts the vocals and the custom model splits
+  the rest into 7 stems. Set `RAGA_SEP8_MODE=hybrid`. **Not recommended**: on
+  18 Nov 2026 the MelBandRoformer checkpoint was found to load with 842
+  missing and 120 unexpected weights (it does not match its architecture), and
+  in hybrid mode the 8 stems no longer add back up to the song (error 0.15
+  instead of 0.0004). The custom model's own vocals reach 6.5 dB on coherent
+  mixes.
 
 **Full-bandwidth trick.** The custom model works at 16 kHz mono, which on its
 own would cut every stem off at 8 kHz. Instead, its output is used only to
@@ -230,7 +233,7 @@ Its limit: every instrument sits in one "instrumental" stem at one position.
 
 | Environment variable | Effect |
 |---|---|
-| `RAGA_SEP8_MODE=pure` | do not use MelBandRoformer for vocals |
+| `RAGA_SEP8_MODE=hybrid` | use MelBandRoformer for the vocals (off by default, see section 4) |
 | `RAGA_FORCE_2STEM=1` | use the 2-stem path even if an 8-stem model exists |
 | `RAGA_SKIP_DETECT=1` | skip BEATs instrument naming (faster) |
 | `RAGA_DEVICE=cpu` or `cuda` | force where the 8-stem model runs |
@@ -583,6 +586,49 @@ keeps using the old run's `separator_v3_best.pt`.
 
 ---
 
+## 9b. The final model (v3, trained 13-18 November 2026)
+
+100 epochs, about 27 minutes each, 44 hours of training. Scores are SDR in dB
+on held-out recordings (0 = silence, 4 to 6 = usable, 7+ = good).
+
+| Epoch | Random mixes | Coherent mixes |
+|---|---|---|
+| 1 | 0.84 | 3.01 |
+| 7 | 1.49 | 4.81 |
+| 40 | 2.74 | 6.07 |
+| 93 (best, used by the app) | **3.50** | 6.62 |
+| 100 (last) | 3.35 | **6.64** |
+
+Final per stem (epoch 100):
+
+| Stem | Random mixes | Coherent mixes |
+|---|---|---|
+| Wind | 5.43 | 12.59 |
+| Bass | 3.45 | 7.41 |
+| Percussion | 2.10 | 7.19 |
+| Vocals | 6.53 | 6.49 |
+| Bowed strings | 3.13 | 6.13 |
+| Plucked strings | 3.13 | no coherent data |
+| Folk / texture | 2.69 | no coherent data |
+| Keys | 1.47 | no coherent data |
+
+The scores rose fast until about epoch 40, then crept: coherent +0.5 and
+random +0.8 over the last 60 epochs.
+
+**Real-song test (`test5.mp3`, 5 minutes, epoch 93, custom model alone).**
+Share of the song's energy per stem: vocals 45.5%, bass 38.7%, percussion
+5.2%, bowed strings 5.3%, folk / texture **4.2%** (it was 64% before the
+folk clips were cleaned), keys 1.1%, plucked strings 0.0%, wind 0.0%.
+The Folk / Texture problem is fixed. Two things are still unverified by ear:
+plucked strings and wind at 0% (absent from the song, or missed?), and bass at
+39% (it may be absorbing the low part of other instruments). Listen to the 8
+files in `data\evaluation\test5`.
+
+**App pipeline test (30 s song, pure mode).** All checks pass: the 8 stems add
+back up to the song (error 0.0004), 5 of 8 stems active, 45 seconds on the
+GPU. BEATs named Guitar and Synthesizer in the right stems, and "Yodeling"
+and "Drum machine" for vocals and percussion.
+
 ## 10. Experiments and measurements
 
 Every number here was measured, not estimated.
@@ -734,6 +780,8 @@ The project then sat untouched for five months.
 | yt-dlp downloaded few clips | a strict duration filter silently rejected most | Filter removed, more results per query. |
 | Slakh "first 700 tracks" gave incomplete tracks | files in the archive are not grouped by track | Download the whole archive (resumable), extract stems only, delete the archive. |
 | FreeSounds key in git | hardcoded in `collect_stems.py` | Moved to `backend\.env`. **The old key is still in git history and must be rotated.** |
+| MelBandRoformer loads with 842 missing weights; hybrid stems do not add up to the song | the checkpoint does not match the architecture (this was a suspected issue in June, confirmed 18 Nov) | Default changed to pure mode; hybrid kept as an option, not recommended. |
+| Windows blocked PyTorch (`Application Control policy has blocked ... caffe2_nvrtc.dll`), then briefly the project folder (access denied) | a Windows security policy; cleared by the owner and a restart | Nothing in the project changed; the owner allowed it in Windows Security. |
 | Real songs landed mostly in the Folk / Texture stem | that category's clips were whole folk songs, found by searches such as "Telugu folk music" | `clean_folk_texture.py` keeps only clips the detector confirms as percussion without voice or melody. |
 
 ### Environment and tooling
@@ -756,10 +804,10 @@ The project then sat untouched for five months.
 
 | # | Problem | Detail |
 |---|---|---|
-| 1 | **The model is barely trained** | 3 epochs. Median 1.3 dB. Percussion, bowed strings and keys are near 0 dB. Needs days. There is no guarantee how far it will get. |
-| 2 | **Folk / texture swallowed real songs** | Data cleaned on 13 Nov ([section 14](#14-the-folk--texture-problem)). Not yet confirmed by training: the epoch 3 checkpoint still has the old habit. |
+| 1 | **The model is good, not great** | Final: random 3.5 dB, coherent 6.6 dB. Keys 1.5 dB, plucked strings 3.1, folk 2.7 on random mixes. Gains over the last 60 epochs were small, so more epochs will not help much; better data or a bigger model would. |
+| 2 | Folk / texture swallowing real songs | **Fixed**: 4.2% of a real song at epoch 93, down from 64% ([section 14](#14-the-folk--texture-problem)). |
 | 3 | Nobody has listened yet | Every quality claim in this file is a measurement. The stems need human ears. |
-| 4 | Hybrid mode not run with the real MelBandRoformer | It was tested with stand-in vocal files only, because MelBandRoformer and training together overfill the GPU. Pause training before processing a song in hybrid mode. |
+| 4 | Hybrid mode is unreliable | Tested 18 Nov: MelBandRoformer loads with 842 missing weights and the stems no longer sum to the song. Off by default. Fixing it would need the correct checkpoint or config. |
 | 5 | Slakh conversion unfinished | 7,308 stems left; about 1 to 2 hours alone. |
 | 6 | Tier 1 data is noisy | YouTube "solos" with accompaniment, lossy previews. |
 | 7 | No clean data for several named instruments | veena, nadaswaram, thavil, bansuri, harmonium, dappu, parai. |
@@ -907,9 +955,11 @@ In order:
 3. **Watch the coherent score.** It is the number closest to real-song
    quality. If it stays far below the random score, the model is still
    learning the easy problem.
-4. **Listen.** Run `evaluate_separator.py` on real songs every 10 epochs and
-   listen to each stem.
-5. **Run a real song through the app in hybrid mode** with training paused.
+4. **Listen.** The 8 stems of `test5.mp3` (epoch 93) are in
+   `data\evaluation\test5`. Check plucked strings, wind and bass in
+   particular.
+5. ~~Run a real song through the app in hybrid mode~~ Done 18 Nov: hybrid mode
+   is unreliable and was switched off (section 4).
 6. **Rotate the FreeSounds secret.**
 7. **Name Indian instruments**: fine-tune BEATs on Indian instrument labels,
    or add a small classifier per stem.
