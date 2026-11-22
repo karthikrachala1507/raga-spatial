@@ -650,6 +650,8 @@ Two small bugs found by these checks and fixed: `core/preprocess.py` printed a
 check-mark character that crashes on a Windows console, and the 2-stem separator
 crashed on audio shorter than 16 s (13 Nov).
 
+## 10. Experiments and measurements
+
 
 Every number here was measured, not estimated.
 
