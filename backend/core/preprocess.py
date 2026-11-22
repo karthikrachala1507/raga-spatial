@@ -46,11 +46,11 @@ def preprocess_audio(file_path: str) -> dict:
 
     # ── Step 1: Load audio ─────────────────────────────────────────────
     audio, sr = load_audio(file_path)
-    print(f"[Preprocess] Loaded — SR: {sr}Hz, Duration: {len(audio)/sr:.2f}s, Shape: {audio.shape}")
+    print(f"[Preprocess] Loaded - SR: {sr}Hz, Duration: {len(audio)/sr:.2f}s, Shape: {audio.shape}")
 
     # ── Step 2: Normalize ──────────────────────────────────────────────
     audio = normalize_audio(audio)
-    print(f"[Preprocess] Normalized — Peak: {np.max(np.abs(audio)):.4f}")
+    print(f"[Preprocess] Normalized - Peak: {np.max(np.abs(audio)):.4f}")
 
     # ── Step 3: Get duration info ──────────────────────────────────────
     duration = len(audio) / sr
@@ -80,9 +80,9 @@ def preprocess_audio(file_path: str) -> dict:
 
     # ── Step 9: Resample for BEATs model ──────────────────────────────
     audio_16k = resample_for_beats(audio, sr)
-    print(f"[Preprocess] Resampled to 16kHz for BEATs — Shape: {audio_16k.shape}")
+    print(f"[Preprocess] Resampled to 16kHz for BEATs - Shape: {audio_16k.shape}")
 
-    print(f"[Preprocess] ✓ Complete")
+    print(f"[Preprocess] OK Complete")
 
     return {
         # Raw audio

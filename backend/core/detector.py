@@ -168,8 +168,17 @@ def _build_label_map():
     checkpoint  = torch.load(BEATS_CHECKPOINT, map_location="cpu")
     label_dict  = checkpoint["label_dict"]
     result      = {}
+    # Names for the AudioSet classes that the table above does not cover.
+    # core/audioset_labels.csv is Google's public AudioSet class list.
+    csv_names = {}
+    csv_path  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audioset_labels.csv")
+    if os.path.exists(csv_path):
+        import csv
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                csv_names[row["mid"]] = row["display_name"].split(",")[0].strip()
     for idx, mid in label_dict.items():
-        result[idx] = MID_TO_NAME.get(mid, mid)
+        result[idx] = MID_TO_NAME.get(mid) or csv_names.get(mid, mid)
     return result
 
 

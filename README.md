@@ -95,6 +95,7 @@ cd /d D:\raga-spatial\backend
 | Cut multitrack datasets into time-aligned stems | `python data_tools\prepare_coherent.py` |
 | Quick audio checks (about 1 minute) | `python tests\test_8stem.py` |
 | Whole pipeline on the test song | `python tests\test_8stem.py pipeline` |
+| Web API end to end (server, upload, every route) | `python tests\test_api.py` |
 
 `download_datasets.py`, `prepare_datasets.py` and `prepare_coherent.py` can be
 stopped and rerun at any time; they skip what is already done. Training picks up new clips at the
@@ -128,6 +129,7 @@ raga-spatial\
 │   │   ├── separator_8stem.py   the custom model: 8 full-bandwidth stems
 │   │   ├── bsrnn.py             the 8-stem model itself
 │   │   ├── detector.py          BEATs: names the instruments in each stem
+│   │   ├── audioset_labels.csv  Google's public AudioSet class names (fills the label gaps)
 │   │   ├── motion.py            finds melodic runs that should move in space
 │   │   ├── spatial.py           positions by instrument label (2-stem path)
 │   │   ├── spatial_8stem.py     the 8 positions, depth layers and rendering
@@ -146,7 +148,7 @@ raga-spatial\
 │   │   ├── prepare_coherent.py    cut multitrack datasets into time-aligned stems
 │   │   ├── clean_folk_texture.py  keeps only folk clips that are percussion
 │   │   └── augment_mix.py         legacy: writes fixed mixes (no longer needed)
-│   ├── tests\                 test_8stem.py, the phase tests, diagnostics, test_song.flac
+│   ├── tests\                 test_8stem.py, test_api.py, the phase tests, test_song.flac
 │   ├── models\                MelBandRoformer, BEATs and HRTF files used by the app
 │   └── outputs\               what the app produces for each uploaded song
 │
@@ -629,7 +631,25 @@ back up to the song (error 0.0004), 5 of 8 stems active, 45 seconds on the
 GPU. BEATs named Guitar and Synthesizer in the right stems, and "Yodeling"
 and "Drum machine" for vocals and percussion.
 
-## 10. Experiments and measurements
+## 9c. Verification of 22 November 2026
+
+Everything below was run, from the final layout, after training finished.
+
+| Check | Result |
+|---|---|
+| Audio checks (`test_8stem.py`) | all pass |
+| Whole pipeline, pure mode, 30 s song | all pass: stems add back up to the song (error 0.0004), 45 s on the GPU |
+| Whole pipeline, hybrid mode | **fails** the sum check (error 0.15); see section 4. Off by default. |
+| Web API end to end (`test_api.py`): health, mode, upload, status, result, mix, per-stem and dry-stem downloads, rejection of bad stem names and path-like job ids | 13 of 13 pass; the pipeline took 33 s |
+| Phase tests `test_separator.py`, `test_detector.py`, `test_renderer.py` | pass (they had not been run since the reorganisation) |
+| Earlier phase tests (`test_spatial`, `test_hrtf`, `test_motion`, `test_preprocess`) | pass (13 Nov) |
+| Saraga Audiovisual against Saraga 1.5 for duplicate recordings | none: 8 shared song titles out of 212, all with different lengths (different performances). No validation leakage from this. |
+| Instrument names | 291 of the 527 detector labels were showing as raw codes such as `/m/01p970`. All now have names (AudioSet class list added). |
+
+Two small bugs found by these checks and fixed: `core/preprocess.py` printed a
+check-mark character that crashes on a Windows console, and the 2-stem separator
+crashed on audio shorter than 16 s (13 Nov).
+
 
 Every number here was measured, not estimated.
 
@@ -811,7 +831,7 @@ The project then sat untouched for five months.
 | 5 | Slakh conversion unfinished | 7,308 stems left; about 1 to 2 hours alone. |
 | 6 | Tier 1 data is noisy | YouTube "solos" with accompaniment, lossy previews. |
 | 7 | No clean data for several named instruments | veena, nadaswaram, thavil, bansuri, harmonium, dappu, parai. |
-| 8 | BEATs does not know Indian instruments | It names "Guitar" or "Drum machine"; it cannot say "veena" or "mridangam". Some classes show as raw ids such as `/m/02w4v` because the label map is incomplete. |
+| 8 | BEATs does not know Indian instruments | It names "Guitar" or "Drum machine"; it cannot say "veena" or "mridangam". (The raw-code gaps were filled on 22 Nov.) |
 | 9 | Model works at 16 kHz mono | Stems are full-band only through the mask trick in [section 4](#4-how-the-app-works). Above 7.5 kHz the split is approximate. Input is mono; the original stereo image is not used. |
 | 10 | Licences | Three datasets are non-commercial. |
 | 11 | FreeSounds secret | Still needs rotating on the FreeSounds site. |
