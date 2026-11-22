@@ -650,6 +650,23 @@ Two small bugs found by these checks and fixed: `core/preprocess.py` printed a
 check-mark character that crashes on a Windows console, and the 2-stem separator
 crashed on audio shorter than 16 s (13 Nov).
 
+## 9d. Reference-song analysis (23 November 2026)
+
+The owner named 11 songs as references and what each should teach (bass,
+vocals, instrument separation and placement, motion, flute / veena / violin,
+overall balance). `backend	rainingnalyze_reference_songs.py` measured each
+one. Nothing was trained: the owner chooses which characteristics to train.
+Numbers are in `data\evaluationeference_songs\`; the songs are not copied.
+
+| Finding | Evidence |
+|---|---|
+| The model is lopsided on real film songs | Vocals plus bass take 70-90% of most songs. Wind, plucked strings (veena) and keys get 0-4% even where they are clearly present. |
+| Heavy electronic sub-bass is misread | "Ordinary Person" has 44% of its energy below 60 Hz; the model gave 77% to Folk / Texture and only 6% to Bass. Training bass is real and synthesised bass guitar, not 808-style sub-bass. |
+| Bass is almost mono in electronic songs, wide in live ones | Left-right correlation below 250 Hz is 0.95-1.0 in Achcham Telugandham, Dheema, Ordinary Person, 3 bgm; 0.2-0.4 in Kanave, Peydhavi, Sajra, Insecurities. |
+| Motion is found only when plucked or wind stems carry the tune | 0 events in Hello Rammante (including its first 30 s), Infatuation and Achcham Telugandham; 4-15 events in Kanave, Insecurities, Peydhavi, Unakku Thaan, 3 bgm. |
+| Instrument names stay generic | "Guitar", "Organ", "Synthetic singing". Violin or cello is named in 5 songs; flute, veena and mridangam are never named (BEATs has no such classes). |
+| Balance song | "Sajra savera" (the owner's balance reference) comes out 76% vocals, 13% Folk / Texture (tabla), 1-3% for everything else. |
+
 ## 10. Experiments and measurements
 
 
