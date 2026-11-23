@@ -106,7 +106,8 @@ def main():
             continue
         path = find_song(part)
         key = "".join(c if c.isalnum() else "_" for c in part)[:30]
-        out_json = os.path.join(OUT_DIR, key + ".json")
+        # RAGA_REF_TAG=_v4 keeps a second model's results next to the first ones
+        out_json = os.path.join(OUT_DIR, key + os.environ.get("RAGA_REF_TAG", "") + ".json")
         if path is None:
             print("NOT FOUND: " + part, flush=True)
             continue

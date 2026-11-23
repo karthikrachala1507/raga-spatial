@@ -37,6 +37,9 @@ import paths
 
 # Where to look for the trained model, in order. RAGA_SEP8_MODEL overrides.
 MODEL_CANDIDATES = [
+    # v5 (real-sounding mastered mixes) beat v3 on the 11-song scorecard on 23 Nov 2026
+    os.path.join(paths.APP_MODELS_DIR, "separator_v5_best.pt"),
+    os.path.join(paths.CHECKPOINTS_DIR, "separator_v5_best.pt"),
     os.path.join(paths.APP_MODELS_DIR, "separator_v3_best.pt"),
     os.path.join(paths.CHECKPOINTS_DIR, "separator_v3_best.pt"),
 ]

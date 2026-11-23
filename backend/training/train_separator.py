@@ -54,16 +54,16 @@ DURATION     = 10.0
 N_SAMPLES    = int(SAMPLE_RATE * DURATION)
 N_STEMS      = 8
 BATCH_SIZE   = 4
-N_EPOCHS     = 100
+N_EPOCHS     = int(os.environ.get("RAGA_EPOCHS", 100))
 MIXES_PER_EPOCH = 12000  # training mixes drawn per epoch (all freshly generated)
 N_VAL_MIXES  = 300       # fixed validation mixes from held-out sources
 N_SDR_MIXES  = 80        # of those, how many are scored in dB each epoch
 FEATURE_DIM  = 112       # width of each band's feature vector
 N_BLOCKS     = 8         # time/band LSTM blocks
 CROP_SECONDS = 6.0       # each training step sees a random 6 s window of a 10 s mix
-LR           = 1e-3
-LR_DECAY     = 0.98
-SAVE_EVERY   = 10
+LR           = float(os.environ.get("RAGA_LR", 1e-3))
+LR_DECAY     = float(os.environ.get("RAGA_LR_DECAY", 0.98))
+SAVE_EVERY   = int(os.environ.get("RAGA_SAVE_EVERY", 10))
 SPLIT_SEED   = 1507      # fixes the validation set across runs and resumes
 VAL_HOLDOUT_MOD = 10     # 1 in 10 source files is held out for validation
 USE_AMP      = True      # mixed precision: about half the GPU memory
@@ -71,18 +71,23 @@ NUM_WORKERS  = 4         # background processes that build mixes (0 = none)
 # Tier 2 sources with these prefixes are still being added, so they are kept
 # out of the validation set to keep it identical from run to run.
 VAL_EXCLUDE_PREFIXES = ("slakh2100__",)
-CHECKPOINT_NAME = "separator_v3"
+# Fine-tuning: RAGA_RUN_NAME gives a run its own checkpoints and log, and
+# RAGA_INIT_FROM starts it from an earlier model's weights (a fresh optimiser,
+# epoch 1), e.g.  RAGA_RUN_NAME=separator_v4 RAGA_INIT_FROM=separator_v3_best.pt
+#                 RAGA_EPOCHS=5 RAGA_LR=2e-4 RAGA_LR_DECAY=0.9
+CHECKPOINT_NAME = os.environ.get("RAGA_RUN_NAME", "separator_v3")
+INIT_FROM       = os.environ.get("RAGA_INIT_FROM", "")
 MIN_TARGET_RMS = 1e-4    # below this, a target stem is considered "absent"
 
 STEMS_MIN, STEMS_MAX = 2, 6        # categories per mix
 LEVEL_MIN, LEVEL_MAX = 0.21, 1.0   # level of each stem in the mix
 SECOND_CLIP_PROB     = 0.25        # chance of layering 2 sources in one category
 MAX_CLIPS_WEIGHT     = 30          # cap so very long recordings do not dominate
-ORIGIN_BALANCE       = 0.5         # 1 = a dataset's share follows its size, 0 = all datasets equal
+ORIGIN_BALANCE       = float(os.environ.get("RAGA_ORIGIN_BALANCE", 0.5))         # 1 = a dataset's share follows its size, 0 = all datasets equal
 
 # Coherent mixes: stems that really played together (data_tools\prepare_coherent.py)
 ALIGNED_DIR          = paths.STEMS_ALIGNED_DIR
-COHERENT_PROB        = 0.5         # share of training mixes that are coherent
+COHERENT_PROB        = float(os.environ.get("RAGA_COHERENT_PROB", 0.5))         # share of training mixes that are coherent
 COHERENT_EXTRA_PROB  = 0.5         # chance of adding 1-2 unrelated stems the track lacks
 COHERENT_TILT_DB     = 3.0         # random level change per stem within a coherent mix
 N_VAL_COHERENT       = 150         # fixed coherent validation mixes from held-out tracks
@@ -286,13 +291,61 @@ def load_clip(path):
     return audio[:N_SAMPLES]
 
 
-def render_recipe(recipe):
+# Mastering chain (training mixes only). Real songs are EQ'd, reverberant and
+# bus-compressed; clean stems summed together are not. Every step keeps the
+# stems summing to the mix: EQ and reverb are applied to each stem before the
+# sum, and the compressor is ONE time-varying gain applied to the mix and to
+# every stem alike. RAGA_MASTER_PROB = chance a training mix gets it (0 = off).
+MASTER_PROB = float(os.environ.get("RAGA_MASTER_PROB", 0.0))
+
+
+def _eq_tilt(audio, rng):
+    low_db, high_db = rng.uniform(-6, 6), rng.uniform(-6, 6)
+    spec  = np.fft.rfft(audio)
+    freqs = np.fft.rfftfreq(len(audio), 1.0 / SAMPLE_RATE)
+    pos   = np.clip(np.log2(np.maximum(freqs, 1.0) / 200.0) / np.log2(4000.0 / 200.0), 0.0, 1.0)
+    gain  = 10 ** ((low_db * (1 - pos) + high_db * pos) / 20)
+    return np.fft.irfft(spec * gain, n=len(audio)).astype(np.float32)
+
+
+def _reverb(audio, rng):
+    length = int(SAMPLE_RATE * rng.uniform(0.2, 0.9))
+    decay  = np.exp(-np.arange(length) / (length / rng.uniform(3.0, 6.0)))
+    ir     = (np.random.default_rng(rng.randrange(1 << 30)).standard_normal(length) * decay).astype(np.float32)
+    ir    /= np.abs(ir).sum() + 1e-8
+    n      = len(audio) + length
+    wet    = np.fft.irfft(np.fft.rfft(audio, n) * np.fft.rfft(ir, n), n)[:len(audio)]
+    mix    = rng.uniform(0.05, 0.3)
+    return ((1 - mix) * audio + mix * wet * 4.0).astype(np.float32)
+
+
+def _master(targets, rng):
+    for i in range(targets.shape[0]):
+        if np.abs(targets[i]).max() < 1e-6:
+            continue
+        if rng.random() < 0.7:
+            targets[i] = _eq_tilt(targets[i], rng)
+        if rng.random() < 0.4:
+            targets[i] = _reverb(targets[i], rng)
+    mix = targets.sum(axis=0)
+    win = 800
+    env = np.sqrt(np.convolve(mix ** 2, np.ones(win, dtype=np.float32) / win, mode="same") + 1e-12)
+    thr = max(float(np.sqrt((mix ** 2).mean())) * rng.uniform(0.5, 1.0), 1e-4)
+    ratio = rng.uniform(2.0, 6.0)
+    gain = np.where(env > thr, (env / thr) ** (1.0 / ratio - 1.0), 1.0).astype(np.float32)
+    gain = np.convolve(gain, np.ones(400, dtype=np.float32) / 400, mode="same")
+    return targets * gain[None, :]
+
+
+def render_recipe(recipe, master_rng=None):
     """Build (mix, targets, active). Targets are exactly what is in the mix."""
     targets = np.zeros((N_STEMS, N_SAMPLES), dtype=np.float32)
     for cat_idx, path, level in recipe:
         audio = load_clip(path)
         if audio is not None:
             targets[cat_idx] += audio * level
+    if master_rng is not None and MASTER_PROB > 0 and master_rng.random() < MASTER_PROB:
+        targets = _master(targets, master_rng)
     mix  = targets.sum(axis=0)
     peak = max(float(np.abs(mix).max()), float(np.abs(targets).max()))
     if peak > 0.95:                       # one scale for the mix and every stem
@@ -321,8 +374,8 @@ class TrainMixDataset(Dataset):
             # randomness instead of a copy of the same generator
             self.rng = random.Random()
         if self.pool.coherent_train and self.rng.random() < COHERENT_PROB:
-            return render_recipe(sample_coherent(self.rng, self.pool))
-        return render_recipe(sample_recipe(self.rng, self.pool.train))
+            return render_recipe(sample_coherent(self.rng, self.pool), self.rng)
+        return render_recipe(sample_recipe(self.rng, self.pool.train), self.rng)
 
 
 class ValMixDataset(Dataset):
@@ -537,7 +590,7 @@ def train():
     model_config    = {"feature_dim": FEATURE_DIM, "n_blocks": N_BLOCKS}
     checkpoint_path = os.path.join(CHECKPOINTS_DIR, CHECKPOINT_NAME + "_latest.pt")
     best_path       = os.path.join(CHECKPOINTS_DIR, CHECKPOINT_NAME + "_best.pt")
-    log_path        = os.path.join(LOGS_DIR, "training_log_v3.json")
+    log_path        = os.path.join(LOGS_DIR, "training_log_" + CHECKPOINT_NAME.replace("separator_", "") + ".json")
     start_epoch     = 0
     best_val_sdr    = float("-inf")
     log             = []
@@ -562,6 +615,12 @@ def train():
                 print("WARNING: could not read existing log, starting a new one")
         print("Resuming from epoch " + str(start_epoch + 1)
               + " (" + str(len(log)) + " earlier epochs in the log)")
+    elif INIT_FROM:
+        init_path = INIT_FROM if os.path.isabs(INIT_FROM) else os.path.join(CHECKPOINTS_DIR, INIT_FROM)
+        print("Fine-tuning " + CHECKPOINT_NAME + " from the weights of " + init_path)
+        ckpt = torch.load(init_path, map_location=DEVICE)
+        model.load_state_dict(ckpt["model"])
+        del ckpt
     else:
         print("Starting fresh v3 training")
 
