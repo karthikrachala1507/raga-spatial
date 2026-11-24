@@ -64,7 +64,7 @@ def main():
         check("result is 8-stem, pure mode", res.get("mode") == "8-stem" and res.get("separation_mode") == "pure",
               "%s / %s" % (res.get("mode"), res.get("separation_mode")))
         stems = res.get("stems8", [])
-        check("result lists 8 stems with layers 1-8", [s["layer"] for s in stems] == list(range(1, 9)))
+        check("result lists 9 stems with layers 1-9", [s["layer"] for s in stems] == list(range(1, 10)))
         active = [s["name"] for s in stems if s["active"]]
         check("at least 3 stems are active", len(active) >= 3, str(active))
         named = [i["label"] for s in stems for i in s["instruments"]]

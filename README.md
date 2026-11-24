@@ -694,6 +694,26 @@ clean South Indian vocal, tabla and bass examples.
 Trap: set `NUMBA_CACHE_DIR` to an existing writable folder
 (`data/numba_cache`) or analysis hangs at preprocessing.
 
+### v7, the 9th stem, placement planner and motion toggle (24 November 2026)
+
+- **9th stem, `hand_percussion`** (tabla, mridangam, ghatam), split from drums by
+  file or source name when the training pool is built (no files moved). The model
+  head is widened from v5 (`start_finetune_9stem.bat`). Old 8-stem checkpoints
+  still load (`categories` is stored in the checkpoint).
+- **v7 result:** mean recall 65%, 2.0 flags per song, below v5 (69%) and v6 (72%),
+  so it is **not promoted**; v5 stays in the app. It lost bowed strings on
+  Peydhavi and went catch-all on Ordinary Person, and did not recover tabla on
+  Kun Faya Kun (86% vocals). More data, not more fine-tuning, is the next lever.
+- **Placement planner** (`plan_layout` in `spatial_8stem.py`): stems closer than
+  35 degrees and 0.20 depth are moved apart, the front 20 degrees stay for vocals,
+  and absent stems free their space.
+- **Motion is optional**, off by default (checkbox in the UI, `motion` form field
+  on upload). `stereo_motion_check.py` measures real panning in the original mixes
+  (`STEREO_MOTION.md`): the balance changes over time in many songs, but this may
+  be arrangement rather than one instrument moving.
+- **Data:** access to the Sanidha dataset (vocals, violin, mridangam, ghatam) was
+  requested by email on 24 November 2026; no reply yet.
+
 ## 10. Experiments and measurements
 
 
