@@ -667,6 +667,33 @@ Numbers are in `data\evaluationeference_songs\`; the songs are not copied.
 | Instrument names stay generic | "Guitar", "Organ", "Synthetic singing". Violin or cello is named in 5 songs; flute, veena and mridangam are never named (BEATs has no such classes). |
 | Balance song | "Sajra savera" (the owner's balance reference) comes out 76% vocals, 13% Folk / Texture (tabla), 1-3% for everything else. |
 
+## 9e. Real-song scorecard and fine-tunes v4 to v6 (23-24 November 2026)
+
+`backend/training/scorecard_reference_songs.py` compares what each model finds
+in the 11 reference songs with what is in them. "What is in them" is BEATs run
+on the original mix plus `data/evaluation/reference_songs/truth.json` (the
+assistant's best guess, unverified; correct it where you know better). Output:
+`data/evaluation/reference_songs/SCORECARD.md`. Fine-tunes start from an
+earlier checkpoint through environment variables (`RAGA_INIT_FROM`,
+`RAGA_LOSS_NORM`, `RAGA_DROP_PROB` and others, see the `start_finetune_*.bat`
+files).
+
+| Model | What changed | Mean recall | Flags per song |
+|---|---|---|---|
+| v3 | 100-epoch model | 61% | 2.3 |
+| v4 | plus synthetic 808 bass | 55% | 2.5 (the validation gain did not carry over to real songs) |
+| v5 | real multitrack windows, mastering chain (EQ, reverb, bus compression) | 69% | 1.9 (**used by the app**) |
+| v6 | level-normalised loss, absent-stem penalty 0.3, vocals/bass dropped from 30% of windows | 72% | 1.7 (not promoted) |
+
+v6 helps Ordinary Person and Kun Faya Kun but loses bowed strings on Kanave-Kanave
+and 3 bgm, so v5 stays in the app. Vocals still take 62-84% of Kun Faya Kun,
+Peydhavi and Unakku Thaan, and bass is a sink in Dheema, Hello Rammante and
+3 bgm. The loss weighting is not the main cause: the training data has too few
+clean South Indian vocal, tabla and bass examples.
+
+Trap: set `NUMBA_CACHE_DIR` to an existing writable folder
+(`data/numba_cache`) or analysis hangs at preprocessing.
+
 ## 10. Experiments and measurements
 
 
