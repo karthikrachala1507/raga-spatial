@@ -248,6 +248,9 @@ def sample_recipe(rng, index):
     return recipe
 
 
+DROP_PROB = float(os.environ.get("RAGA_DROP_PROB", 0.0))   # chance a coherent window loses its vocals (and, separately, its bass)
+
+
 def sample_coherent(rng, pool):
     """A mix of instruments that really played together: one track, one moment.
 
@@ -269,8 +272,18 @@ def sample_coherent(rng, pool):
             tilt[cat_idx] = 10 ** (rng.uniform(-COHERENT_TILT_DB, COHERENT_TILT_DB) / 20)
         recipe.append((cat_idx, path, gain * tilt[cat_idx]))
 
+    # Drop vocals and/or bass from some windows (their targets go too), so the
+    # model stops assuming a lead voice and a bass line are always there.
+    if DROP_PROB > 0:
+        for name in ("vocals", "bass"):
+            idx = CATEGORIES.index(name) if name in CATEGORIES else -1
+            if idx >= 0 and rng.random() < DROP_PROB:
+                kept = [r for r in recipe if r[0] != idx]
+                if len({r[0] for r in kept}) >= 2:
+                    recipe = kept        # tilt keeps idx, so it is not re-added as an "extra" stem
+
     if rng.random() < COHERENT_EXTRA_PROB:
-        absent = [c for c in CATEGORIES if c in pool.train and CATEGORIES.index(c) not in tilt]
+        absent =[c for c in CATEGORIES if c in pool.train and CATEGORIES.index(c) not in tilt]
         for cat in rng.sample(absent, min(len(absent), rng.randint(1, 2))):
             names, weights, sources = pool.train[cat]
             source = rng.choices(names, weights=weights, k=1)[0]
@@ -417,6 +430,9 @@ from core.bsrnn import BandSplitRNN
 
 # ── Loss function (FIXED) ──────────────────────────────────────────────────────
 
+LOSS_NORM = float(os.environ.get("RAGA_LOSS_NORM", 0.0))   # 0 = old behaviour, 1 = fully level-normalised
+ABSENT_W  = float(os.environ.get("RAGA_ABSENT_W", 0.05))   # weight of the penalty on stems that are absent
+
 def masked_loss(pred, target, active, eps=1e-8):
     """
     pred, target: (batch, n_stems, n_samples)
@@ -431,7 +447,18 @@ def masked_loss(pred, target, active, eps=1e-8):
     inactive_mask = 1.0 - active_mask
 
     # --- Active stems: reconstruct properly ---
-    l1_active = torch.abs(pred - target) * active_mask
+    # LOSS_NORM: a loud stem (vocals, bass) dominates a plain L1 loss, so quiet
+    # stems (tabla, plucked strings, keys) barely count. With LOSS_NORM > 0 each
+    # active stem's loss is divided by its own level (a floor stops near-silent
+    # stems from exploding), then rescaled so the average weight stays 1.
+    if LOSS_NORM > 0:
+        level  = target.abs().mean(dim=-1, keepdim=True)              # (batch, n_stems, 1)
+        weight = (1.0 / (level + 0.02)) ** LOSS_NORM * active_mask
+        weight = weight / (weight.sum() / (active_mask.sum() + eps) + eps)
+        weight = weight.clamp(max=8.0)
+    else:
+        weight = active_mask
+    l1_active = torch.abs(pred - target) * weight
     l1_active = l1_active.sum() / (active_mask.sum() * pred.shape[-1] + eps)
 
     # Spectral magnitude loss for active stems (more perceptually meaningful
@@ -442,7 +469,7 @@ def masked_loss(pred, target, active, eps=1e-8):
     target_spec = torch.stft(target.reshape(-1, target.shape[-1]), 1024, 256,
                              window=torch.hann_window(1024).to(target.device),
                              return_complex=True).abs()
-    active_flat = active_mask.reshape(-1, 1, 1).expand_as(pred_spec)
+    active_flat = weight.reshape(-1, 1, 1).expand_as(pred_spec)
     spec_loss   = (torch.abs(pred_spec - target_spec) * active_flat).sum() / \
                   (active_flat.sum() + eps)
 
@@ -451,7 +478,7 @@ def masked_loss(pred, target, active, eps=1e-8):
     l1_inactive = l1_inactive.sum() / (inactive_mask.sum() * pred.shape[-1] + eps)
 
     # Weighted combination - active reconstruction dominates
-    loss = (1.0 * l1_active) + (0.5 * spec_loss) + (0.05 * l1_inactive)
+    loss = (1.0 * l1_active) + (0.5 * spec_loss) + (ABSENT_W * l1_inactive)
     return loss
 
 
