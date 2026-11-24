@@ -255,4 +255,6 @@ def separate_8stems(audio, sr, job_id, vocals_path=None, instrumental_path=None,
         "device":      device,
         "paths":       paths,
         "audio":       audio_out,
+        "estimates_16k": estimates[keep],     # for real_motion: masks reused on L and R
+        "names":         names,
     }

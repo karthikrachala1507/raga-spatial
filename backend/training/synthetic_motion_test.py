@@ -20,6 +20,7 @@ import soundfile as sf
 import soxr
 
 from core import separator_8stem as sep
+from core import real_motion
 from training.analyze_reference_songs import OUT_DIR
 from training.stem_stereo_motion import pan_series
 from training.stereo_motion_check import SR
@@ -94,6 +95,7 @@ def main():
                     break
         random.shuffle(cand)
         res = {"static": [], "swept": [], "small": []}
+        flag = {"static": [], "swept": [], "small": []}
         corrs = []
         used = 0
         for base, w0 in cand:
@@ -134,6 +136,8 @@ def main():
                 if len(sw) == 0:
                     continue
                 res[cond].append((float((sw > SWING).mean()), float(pan[loud].std())))
+                a = real_motion.analyse_stem(sl[ci], sr_[ci], SR)
+                flag[cond].append(bool(a and a["moving"]))
                 if cond == "swept" and loud.sum() > 5:  # corr only for the big sweep
                     true = np.array([0.6 * np.sin(2 * np.pi * (i + 0.5) / 6.0) for i in range(len(pan))])
                     corrs.append(float(np.corrcoef(pan[loud], true[loud])[0, 1]))
@@ -144,7 +148,8 @@ def main():
             tgt, len(res["swept"]), 100 * avg(res["static"], 0), 100 * avg(res["swept"], 0),
             100 * avg(res["small"], 0), float(np.mean(corrs)) if corrs else float("nan"),
             avg(res["static"], 1), avg(res["swept"], 1), avg(res["small"], 1)))
-        print(lines[-1], flush=True)
+        lines.append("| &nbsp;&nbsp;app rule (real_motion) flags moving | | %.0f%% | %.0f%% | %.0f%% | | |" % tuple(100 * (np.mean(flag[c]) if flag[c] else float("nan")) for c in ("static", "swept", "small")))
+        print(lines[-2], lines[-1], flush=True)
     text = "\n".join(lines)
     open(os.path.join(OUT_DIR, "SYNTHETIC_MOTION.md"), "w", encoding="utf-8").write(text)
     print(text)

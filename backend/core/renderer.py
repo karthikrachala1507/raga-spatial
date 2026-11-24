@@ -277,34 +277,29 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     _progress(3, "Detection done [" + str(round(time.time()-t, 1)) + "s]")
 
     # Step 4: motion on the melodic stems
-    _progress(4, "Detecting motion events..." if motion else "Motion is off (optional feature)")
+    _progress(4, "Measuring real stereo motion..." if motion else "Motion is off (optional feature)")
     t = time.time()
     from core.preprocess import extract_chroma, detect_onsets
     from core.motion import detect_motion_events, summarise_motion
     events_by_stem = {}
     motion_events  = []
-    for name in (spatial_8stem.MOTION_CARRIERS if motion else []):
-        if not levels[name]["active"] or levels[name]["share"] < 0.03:
-            continue
+    plan = spatial_8stem.plan_layout(active)
+    real_traj, real_moving, real_report = {}, {}, {}
+    if motion:
+        # Motion follows what the original stereo recording really does (core/real_motion.py)
         try:
-            events = detect_motion_events(
-                chroma     = extract_chroma(stems[name], sr),
-                onsets     = detect_onsets(stems[name], sr),
-                beats      = beats,
-                detections = [],
-                sr         = sr,
-                hop_length = 512,
-            )
+            from core import real_motion
+            labels = {n: (stem_instruments[n][0]["label"] if stem_instruments[n] else STEM_LAYOUT[n]["label"])
+                      for n in STEM_ORDER}
+            motion_events, real_traj, real_moving, real_report = real_motion.detect_real_motion(
+                audio_path, sr, sep, duration_sec, plan, levels, labels,
+                spatial_8stem.TRAJECTORY_RES_SEC)
+            for ev in motion_events:
+                events_by_stem.setdefault(ev["stem"], []).append(ev)
+            print("[Pipeline] Real motion check: " + str(real_report))
         except Exception as e:
-            print("[Pipeline] Motion detection failed for " + name + ": " + str(e))
-            events = []
-        label = (stem_instruments[name][0]["label"] if stem_instruments[name]
-                 else STEM_LAYOUT[name]["label"])
-        for ev in events:
-            ev["dominant_instrument"] = label
-            ev["stem"] = name
-        events_by_stem[name] = events
-        motion_events.extend(events)
+            print("[Pipeline] Real motion failed (" + str(e) + "), stems stay still")
+            motion_events, real_traj, real_moving = [], {}, {}
     motion_events.sort(key=lambda ev: ev["start_sec"])
     motion_summary = summarise_motion(motion_events, duration_sec)
     # two stems can move at once: count the time when anything moves, once
@@ -322,12 +317,7 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
 
     # Step 5: positions and trajectories
     _progress(5, "Assigning spatial positions and depth layers...")
-    plan = spatial_8stem.plan_layout(active)
-    trajectories, moving = {}, {}
-    for name, events in events_by_stem.items():
-        if events:
-            trajectories[name], moving[name] = spatial_8stem.build_trajectory(
-                name, events, duration_sec, base=plan.get(name, {}).get("azimuth"))
+    trajectories, moving = dict(real_traj), dict(real_moving)
 
     # Step 6: binaural rendering
     _progress(6, "Rendering binaural audio (HRTF + depth)...")

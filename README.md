@@ -714,6 +714,30 @@ Trap: set `NUMBA_CACHE_DIR` to an existing writable folder
 - **Data:** access to the Sanidha dataset (vocals, violin, mridangam, ghatam) was
   requested by email on 24 November 2026; no reply yet.
 
+### Motion that follows the original recording (24 November 2026)
+
+The rule-based detector (rising/falling phrases) did not line up with any real
+panning in the originals (`MOTION_VS_REAL.md`), so the optional motion feature now
+**measures** movement instead (`backend/core/real_motion.py`):
+
+1. The separator's masks are applied to the left and right channel of the original
+   separately, giving each stem's own left/right balance every second.
+2. A stem counts as moving only if its pan spread is at least 0.20 and it swings by
+   more than 0.25 inside 4 s for at least half of the time it is audible (stem share
+   at least 5%). Vocals and bass are never moved.
+3. The measured pan, relative to the stem's usual position, becomes an azimuth offset
+   (60 degrees per unit of pan, at most 70 degrees) around the planned position.
+
+Calibration on synthetic mixes with known pan paths (`SYNTHETIC_MOTION.md`, 10 s
+clips, 8-12 mixes per stem): a still stem is wrongly flagged 8-12% of the time, a swept
+stem is caught 50-75% of the time (rule is deliberately conservative). On the real
+songs it is selective: Unakku Thaan moves bowed strings only; Peydhavi moves wind and
+keys; Kanave moves strings. Motion stays off by default. The old detector is no longer
+used by the app. Trap: scripts run with the env's python.exe directly need
+`<env>in` on PATH (or an activated env), or BEATs fails with a missing
+`nvrtc-builtins64_118.dll`.
+
+
 ## 10. Experiments and measurements
 
 
