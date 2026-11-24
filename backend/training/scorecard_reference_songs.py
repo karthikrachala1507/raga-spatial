@@ -39,13 +39,13 @@ from training.analyze_reference_songs import SONGS, OUT_DIR, find_song, ffmpeg_e
 
 TAGS_DIR = os.path.join(OUT_DIR, "mix_tags")
 TRUTH    = os.path.join(OUT_DIR, "truth.json")
-MODELS   = [("v3", ""), ("v4", "_v4"), ("v5", "_v5"), ("v6", "_v6")]
+MODELS   = [("v3", ""), ("v4", "_v4"), ("v5", "_v5"), ("v6", "_v6"), ("v7", "_v7")]
 CATS = ["percussion", "plucked_strings", "bowed_strings", "wind", "keys_synth", "vocals", "bass"]
 
 # keyword (lower case, in the AudioSet label) -> category; first match wins
 KEYWORDS = [
     ("bass drum", "percussion"), ("bass guitar", "bass"), ("double bass", "bass"), ("bass", "bass"),
-    ("drum", "percussion"), ("percussion", "percussion"), ("tabla", "percussion"), ("cymbal", "percussion"),
+    ("drum", "percussion"), ("percussion", "percussion"), ("tabla", "percussion"), ("mridangam", "percussion"), ("ghatam", "percussion"), ("cymbal", "percussion"),
     ("hi-hat", "percussion"), ("snare", "percussion"), ("tambourine", "percussion"), ("conga", "percussion"),
     ("bongo", "percussion"), ("maraca", "percussion"), ("clapping", "percussion"), ("shaker", "percussion"),
     ("mandolin", "plucked_strings"), ("guitar", "plucked_strings"), ("banjo", "plucked_strings"),
@@ -104,6 +104,8 @@ def mix_tags(part, path):
 
 def judge(model_json, presence, truth_cats):
     shares = {s["stem"]: s["share_pct"] for s in model_json["stems"]}
+    # a model with a separate hand-percussion stem is scored on drums + hand drums together
+    shares["percussion"] = shares.get("percussion", 0) + shares.get("hand_percussion", 0)
     flags = []
     for c in CATS:
         if presence[c] >= 30 and shares.get(c, 0) < 3:

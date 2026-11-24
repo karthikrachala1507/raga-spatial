@@ -29,13 +29,16 @@ STEM_LAYOUT = {
     "bowed_strings":   {"label": "Bowed strings",   "layer": 5, "azimuth": 225, "distance": 0.60,
                         "trim_db": 1.0, "color": "#34D399",
                         "contains": "violin, viola, cello, string section"},
-    "percussion":      {"label": "Percussion",      "layer": 6, "azimuth": 180, "distance": 0.65,
+    "hand_percussion": {"label": "Hand percussion", "layer": 6, "azimuth": 120, "distance": 0.55,
+                        "trim_db": 1.5, "color": "#FB7185",
+                        "contains": "tabla, mridangam, ghatam, kanjira, dholak, thavil"},
+    "percussion":      {"label": "Drums",           "layer": 7, "azimuth": 180, "distance": 0.65,
                         "trim_db": 2.0, "color": "#F87171",
-                        "contains": "tabla, mridangam, ghatam, kanjira, drums, thavil"},
-    "bass":            {"label": "Bass",            "layer": 7, "azimuth": 135, "distance": 0.75,
+                        "contains": "drum kit, electronic drums, cymbals"},
+    "bass":            {"label": "Bass",            "layer": 8, "azimuth": 135, "distance": 0.75,
                         "trim_db": 4.0, "color": "#A78BFA",
                         "contains": "bass guitar, 808, sub"},
-    "folk_texture":    {"label": "Folk / Texture",  "layer": 8, "azimuth": 270, "distance": 0.85,
+    "folk_texture":    {"label": "Folk / Texture",  "layer": 9, "azimuth": 270, "distance": 0.85,
                         "trim_db": 2.0, "color": "#FB923C",
                         "contains": "dappu, parai, dhol, kombu, atmosphere"},
 }
@@ -56,10 +59,13 @@ FAMILY_WORDS = {
                         "sampler", "accordion", "harmonium"],
     "bowed_strings":   ["bowed", "string section", "violin", "fiddle", "cello",
                         "double bass", "orchestra"],
-    "percussion":      ["tabla", "mridangam", "drum", "percussion", "snare", "hi-hat",
-                        "cymbal", "tambourine", "gong", "marimba", "vibraphone",
+    "percussion":      ["drum", "percussion", "snare", "hi-hat",
+                        "cymbal", "gong", "marimba", "vibraphone",
                         "mallet", "steelpan", "rimshot", "timpani", "wood block",
-                        "maraca", "cowbell"],
+                        "cowbell"],
+    "hand_percussion": ["tabla", "mridangam", "ghatam", "hand drum", "conga", "bongo",
+                        "tambourine", "maraca", "shaker", "clapping", "percussion",
+                        "drum"],
     "bass":            ["bass guitar", "double bass", "bass"],
     "folk_texture":    ["drum", "percussion", "tabla", "tambourine", "ambient",
                         "folk", "bell", "chime", "rattle"],
@@ -119,7 +125,7 @@ def name_instruments(stem_name, detection_windows, top_n=3):
 MIN_ANGLE_GAP  = 35.0    # degrees: two stems closer than this must differ in depth
 MIN_DEPTH_GAP  = 0.20    # distance units
 FRONT_RESERVED = 20.0    # +/- degrees kept for the vocals (and bass) when they play
-PLAN_PRIORITY  = ["vocals", "bass", "percussion", "plucked_strings", "wind",
+PLAN_PRIORITY  = ["vocals", "bass", "percussion", "hand_percussion", "plucked_strings", "wind",
                   "bowed_strings", "keys_synth", "folk_texture"]
 
 

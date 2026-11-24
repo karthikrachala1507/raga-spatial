@@ -29,7 +29,7 @@ JOBS_LOCK = threading.Lock()
 
 
 STEM_NAMES = ("vocals", "instrumental", "percussion", "plucked_strings",
-              "bowed_strings", "wind", "keys_synth", "bass", "folk_texture")
+              "bowed_strings", "wind", "keys_synth", "bass", "folk_texture", "hand_percussion")
 
 
 def _job_id_ok(job_id):

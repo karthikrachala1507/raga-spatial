@@ -103,7 +103,7 @@ const fmt = (t) => {
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0")
 }
 
-// ── Spatial map: 8 zones on depth rings ───────────────────────────────────────
+// ── Spatial map: zones on depth rings ───────────────────────────────────────
 function SpatialMap8({ stems, time, envelopeHz, audible, onSolo }) {
   const size = 400
   const c = size / 2
@@ -245,7 +245,7 @@ export default function Stems8View({ api, jobId, result, onTime }) {
         <div className="panel">
           <div className="panel-title">Live spatial map</div>
           <div className="panel-sub">
-            8 depth layers, nearest in the centre. Dots grow with each stem's level. Click a dot to solo it.
+            Depth layers, nearest in the centre. Dots grow with each stem's level. Click a dot to solo it.
           </div>
           <SpatialMap8 stems={stems} time={time} envelopeHz={envelopeHz}
             audible={audible} onSolo={(n) => update(n, { solo: !mix[n].solo })} />

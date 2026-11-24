@@ -52,7 +52,7 @@ DEVICE       = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE  = 16000
 DURATION     = 10.0
 N_SAMPLES    = int(SAMPLE_RATE * DURATION)
-N_STEMS      = 8
+N_STEMS      = 9
 BATCH_SIZE   = 4
 N_EPOCHS     = int(os.environ.get("RAGA_EPOCHS", 100))
 MIXES_PER_EPOCH = 12000  # training mixes drawn per epoch (all freshly generated)
@@ -94,8 +94,25 @@ N_VAL_COHERENT       = 150         # fixed coherent validation mixes from held-o
 
 CATEGORIES = [
     "percussion", "plucked_strings", "bowed_strings",
-    "wind", "keys_synth", "vocals", "bass", "folk_texture"
+    "wind", "keys_synth", "vocals", "bass", "folk_texture",
+    "hand_percussion"
 ]
+# hand_percussion has no folder of its own: Indian hand drums (tabla, mridangam,
+# ghatam, ...) are filed under percussion on disk and split off by name when the
+# pool is built, so no files move. Everything else in percussion is the drum kit.
+FOLDER_CATS = [c for c in CATEGORIES if c != "hand_percussion"]
+HAND_DRUM_WORDS = ("mridangam", "ghatam", "tabla", "kanjira", "thavil",
+                   "dholak", "dhol", "morsing", "pakhawaj")
+
+
+def effective_cat(folder_cat, name):
+    """The training category of a file: percussion files named after Indian hand drums become hand_percussion."""
+    if folder_cat == "percussion":
+        low = name.lower()
+        if any(w in low for w in HAND_DRUM_WORDS):
+            return "hand_percussion"
+    return folder_cat
+
 
 # ── Data: clip pools and on-the-fly mixing ───────────────────────────────────
 
@@ -135,8 +152,8 @@ class ClipPool:
         tracks = {}
         if not self.aligned_dir or not os.path.isdir(self.aligned_dir):
             return tracks
-        for cat_idx, cat in enumerate(CATEGORIES):
-            cat_dir = os.path.join(self.aligned_dir, cat)
+        for folder_cat in FOLDER_CATS:
+            cat_dir = os.path.join(self.aligned_dir, folder_cat)
             if not os.path.isdir(cat_dir):
                 continue
             with os.scandir(cat_dir) as entries:
@@ -147,6 +164,7 @@ class ClipPool:
                     if len(parts) != 4:
                         continue
                     dataset, track, source, window = parts
+                    cat_idx = CATEGORIES.index(effective_cat(folder_cat, source))
                     tracks.setdefault((dataset, track), {}).setdefault(window, []).append(
                         (cat_idx, e.path, dataset + "__" + source))
         return tracks
@@ -182,8 +200,8 @@ class ClipPool:
         train = {c: {} for c in CATEGORIES}
         val   = {c: {} for c in CATEGORIES}
         for pool_idx, root in enumerate(self.pool_dirs):
-            for cat in CATEGORIES:
-                cat_dir = os.path.join(root, cat)
+            for folder_cat in FOLDER_CATS:
+                cat_dir = os.path.join(root, folder_cat)
                 if not os.path.isdir(cat_dir):
                     continue
                 with os.scandir(cat_dir) as entries:
@@ -191,6 +209,7 @@ class ClipPool:
                         if not e.name.endswith(".wav"):
                             continue
                         source = clip_source(e.name)
+                        cat    = effective_cat(folder_cat, source)
                         if is_val_source(source):
                             # held out everywhere; datasets still growing stay
                             # out of the fixed validation set
@@ -646,7 +665,18 @@ def train():
         init_path = INIT_FROM if os.path.isabs(INIT_FROM) else os.path.join(CHECKPOINTS_DIR, INIT_FROM)
         print("Fine-tuning " + CHECKPOINT_NAME + " from the weights of " + init_path)
         ckpt = torch.load(init_path, map_location=DEVICE)
-        model.load_state_dict(ckpt["model"])
+        state, own = ckpt["model"], model.state_dict()
+        for key, old in list(state.items()):
+            new = own[key]
+            if old.shape != new.shape:
+                # more output stems than the checkpoint: the output layer is stem-major,
+                # so the extra stems start as copies of the first one (percussion)
+                per   = new.shape[0] // N_STEMS
+                assert old.shape[0] % per == 0 and old.shape[1:] == new.shape[1:], key
+                extra = [old[:per]] * (N_STEMS - old.shape[0] // per)
+                state[key] = torch.cat([old] + extra, dim=0)
+                print("  widened " + key + " " + str(tuple(old.shape)) + " -> " + str(tuple(state[key].shape)))
+        model.load_state_dict(state)
         del ckpt
     else:
         print("Starting fresh v3 training")

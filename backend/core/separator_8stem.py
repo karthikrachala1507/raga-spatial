@@ -28,8 +28,10 @@ STEMS_DIR   = os.path.join(BACKEND_DIR, "outputs", "stems")
 
 CATEGORIES = [
     "percussion", "plucked_strings", "bowed_strings",
-    "wind", "keys_synth", "vocals", "bass", "folk_texture"
+    "wind", "keys_synth", "vocals", "bass", "folk_texture",
+    "hand_percussion"          # models trained before 24 Nov 2026 have the first 8 only
 ]
+LEGACY_8 = CATEGORIES[:8]
 
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
@@ -94,12 +96,14 @@ def load_model(device):
         sys.path.insert(0, BACKEND_DIR)
     from core.bsrnn import BandSplitRNN
     ckpt  = torch.load(path, map_location="cpu")
-    model = BandSplitRNN(n_stems=len(CATEGORIES), **ckpt.get("config", {}))
+    cats  = list(ckpt.get("categories") or LEGACY_8)
+    model = BandSplitRNN(n_stems=len(cats), **ckpt.get("config", {}))
     model.load_state_dict(ckpt["model"])
     model = model.to(device).eval()
     epoch = int(ckpt.get("epoch", -1)) + 1
     print("[Separator8] Loaded " + path + " (epoch " + str(epoch) + ") on " + device.upper())
     _MODEL_CACHE.clear()
+    model.categories = cats
     _MODEL_CACHE[key] = (model, epoch)
     return model, epoch
 
@@ -107,7 +111,7 @@ def load_model(device):
 def infer_16k(model, audio_16k, device, progress=None):
     """Run the model over a whole song in overlapping 10 s chunks. Returns (8, n)."""
     n      = len(audio_16k)
-    out    = np.zeros((len(CATEGORIES), n), dtype=np.float32)
+    out    = np.zeros((model.n_stems, n), dtype=np.float32)
     weight = np.zeros(n, dtype=np.float32)
     fade   = CHUNK - CHUNK_HOP
     ramp   = np.linspace(0.0, 1.0, fade, dtype=np.float32)
@@ -216,20 +220,23 @@ def separate_8stems(audio, sr, job_id, vocals_path=None, instrumental_path=None,
     if hybrid:
         vocals = _load_mono(vocals_path, sr, n)
         source = _load_mono(instrumental_path, sr, n)
-        names  = [c for c in CATEGORIES if c != "vocals"]
+        names  = [c for c in model.categories if c != "vocals"]
     else:
         vocals = None
         source = np.asarray(audio, dtype=np.float32)
-        names  = list(CATEGORIES)
+        names  = list(model.categories)
 
     print("[Separator8] Mode: " + ("hybrid" if hybrid else "pure")
           + " | " + str(round(n / sr, 1)) + "s | device " + device.upper())
     source_16k = soxr.resample(source, sr, MODEL_SR).astype(np.float32)
     estimates  = infer_16k(model, source_16k, device, progress)
-    keep       = [CATEGORIES.index(c) for c in names]
+    keep       = [model.categories.index(c) for c in names]
     stems, shares = fullband_stems(source, estimates[keep], sr)
 
     audio_out = {name: stems[i] for i, name in enumerate(names)}
+    for name in CATEGORIES:                       # a model without this stem: silence
+        if name not in audio_out and name != "vocals":
+            audio_out[name] = np.zeros(n, dtype=np.float32)
     if hybrid:
         audio_out["vocals"] = vocals
 
