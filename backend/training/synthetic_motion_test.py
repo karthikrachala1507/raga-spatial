@@ -29,9 +29,10 @@ TARGETS = ["bowed_strings", "plucked_strings", "wind", "keys_synth"]
 OTHERS = ["percussion", "bass"]
 FIXED_PANS = {"vocals": 0.0, "percussion": -0.5, "bass": 0.0, "keys_synth": -0.4,
               "bowed_strings": -0.3, "plucked_strings": 0.5, "wind": -0.3}
-N_PER = 6
-NWIN = 3
+N_PER = 12
+NWIN = 1
 SWING = 0.25
+AMP = {"swept": 0.6, "small": 0.3}
 random.seed(7)
 
 
@@ -66,15 +67,18 @@ def pan_gains(p):
     return np.cos(ang), np.sin(ang)
 
 
+skipped = {}
+
+
 def main():
     dev = sep.pick_device()
     model, _ = sep.load_model(dev)
     cats = {c: index(c) for c in set(TARGETS + OTHERS)}
     lines = ["# Synthetic motion test", "",
-             "Known pan applied to one stem (static +0.4, or swept +-0.6 over 8 s) inside a fixed-pan mix; "
+             "Known pan applied to one stem (static +0.4, or swept +-0.6 over 6 s) inside a fixed-pan mix; "
              "then separated and measured. 'moving' = share of audible time with pan swing > %.2f within 4 s. "
              "'corr' = correlation of the measured pan with the applied pan (moving mixes only)." % SWING, "",
-             "| target | mixes | static: moving | swept: moving | swept: corr | static: pan std | swept: pan std |",
+             "| target | mixes | static: moving | swept 0.6: moving | swept 0.3: moving | swept 0.6 corr | pan std static / 0.6 / 0.3 |",
              "|---|---|---|---|---|---|---|"]
     for tgt in TARGETS:
         bases = None
@@ -89,7 +93,7 @@ def main():
                     cand.append((base, w0))
                     break
         random.shuffle(cand)
-        res = {"static": [], "swept": []}
+        res = {"static": [], "swept": [], "small": []}
         corrs = []
         used = 0
         for base, w0 in cand:
@@ -101,12 +105,12 @@ def main():
             n = min(len(v) for v in stems.values())
             stems = {c: v[:n] for c, v in stems.items()}
             t = np.arange(n) / SR
-            for cond in ("static", "swept"):
+            for cond in ("static", "swept", "small"):
                 L = np.zeros(n, np.float32)
                 R = np.zeros(n, np.float32)
                 for c, v in stems.items():
                     if c == tgt:
-                        p = np.full(n, 0.4) if cond == "static" else 0.6 * np.sin(2 * np.pi * t / 8.0)
+                        p = np.full(n, 0.4) if cond == "static" else AMP[cond] * np.sin(2 * np.pi * t / 6.0)
                     else:
                         p = np.full(n, FIXED_PANS[c])
                     gl, gr = pan_gains(p)
@@ -120,6 +124,7 @@ def main():
                 sr_, _ = sep.fullband_stems(R, est, SR)
                 ci = model.categories.index(tgt)
                 if shares[ci] < 0.03:
+                    skipped[tgt] = skipped.get(tgt, 0) + 1
                     continue
                 pan, en = pan_series(sl[ci], sr_[ci])
                 loud = en > 0.05 * np.median(en + 1e-12)
@@ -129,15 +134,16 @@ def main():
                 if len(sw) == 0:
                     continue
                 res[cond].append((float((sw > SWING).mean()), float(pan[loud].std())))
-                if cond == "swept" and loud.sum() > 5:
-                    true = np.array([0.6 * np.sin(2 * np.pi * (i + 0.5) / 8.0) for i in range(len(pan))])
+                if cond == "swept" and loud.sum() > 5:  # corr only for the big sweep
+                    true = np.array([0.6 * np.sin(2 * np.pi * (i + 0.5) / 6.0) for i in range(len(pan))])
                     corrs.append(float(np.corrcoef(pan[loud], true[loud])[0, 1]))
             used += 1
         def avg(lst, i):
             return np.mean([x[i] for x in lst]) if lst else float("nan")
-        lines.append("| %s | %d | %.0f%% | %.0f%% | %.2f | %.2f | %.2f |" % (
+        lines.append("| %s | %d | %.0f%% | %.0f%% | %.0f%% | %.2f | %.2f / %.2f / %.2f |" % (
             tgt, len(res["swept"]), 100 * avg(res["static"], 0), 100 * avg(res["swept"], 0),
-            float(np.mean(corrs)) if corrs else float("nan"), avg(res["static"], 1), avg(res["swept"], 1)))
+            100 * avg(res["small"], 0), float(np.mean(corrs)) if corrs else float("nan"),
+            avg(res["static"], 1), avg(res["swept"], 1), avg(res["small"], 1)))
         print(lines[-1], flush=True)
     text = "\n".join(lines)
     open(os.path.join(OUT_DIR, "SYNTHETIC_MOTION.md"), "w", encoding="utf-8").write(text)
