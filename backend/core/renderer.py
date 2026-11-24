@@ -24,7 +24,7 @@ STEM_LABEL_MAP = {
 }
 
 
-def run_full_pipeline(audio_path, job_id, progress_callback=None):
+def run_full_pipeline(audio_path, job_id, progress_callback=None, motion=False):
     """
     Run the complete Raga Spatial pipeline on a song.
 
@@ -32,6 +32,8 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None):
         audio_path        : path to input mp3/wav/flac
         job_id            : unique job identifier
         progress_callback : optional function(step, message) for UI updates
+        motion            : False (default) keeps every stem still; True lets the
+                            melodic stems sweep during detected motion events
 
     Returns:
         dict with all outputs:
@@ -82,7 +84,7 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None):
     if separator_8stem.is_available() and os.environ.get("RAGA_FORCE_2STEM") != "1":
         return _run_8stem_pipeline(
             audio_path, job_id, audio, sr, duration_sec,
-            tempo, beats, onsets, pipeline_start, _progress)
+            tempo, beats, onsets, pipeline_start, _progress, motion)
 
     # Step 2: Source separation
     _progress(2, "Separating stems (MelBandRoformer)...")
@@ -214,7 +216,7 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None):
 
 
 def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
-                        tempo, beats, onsets, pipeline_start, _progress):
+                        tempo, beats, onsets, pipeline_start, _progress, motion=False):
     """
     8-stem pipeline: separate into 8 category stems, name the instruments in
     each stem, detect motion on the melodic stems, then place every stem at its
@@ -275,13 +277,13 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     _progress(3, "Detection done [" + str(round(time.time()-t, 1)) + "s]")
 
     # Step 4: motion on the melodic stems
-    _progress(4, "Detecting motion events...")
+    _progress(4, "Detecting motion events..." if motion else "Motion is off (optional feature)")
     t = time.time()
     from core.preprocess import extract_chroma, detect_onsets
     from core.motion import detect_motion_events, summarise_motion
     events_by_stem = {}
     motion_events  = []
-    for name in spatial_8stem.MOTION_CARRIERS:
+    for name in (spatial_8stem.MOTION_CARRIERS if motion else []):
         if not levels[name]["active"] or levels[name]["share"] < 0.03:
             continue
         try:
@@ -320,18 +322,19 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
 
     # Step 5: positions and trajectories
     _progress(5, "Assigning spatial positions and depth layers...")
+    plan = spatial_8stem.plan_layout(active)
     trajectories, moving = {}, {}
     for name, events in events_by_stem.items():
         if events:
             trajectories[name], moving[name] = spatial_8stem.build_trajectory(
-                name, events, duration_sec)
+                name, events, duration_sec, base=plan.get(name, {}).get("azimuth"))
 
     # Step 6: binaural rendering
     _progress(6, "Rendering binaural audio (HRTF + depth)...")
     t = time.time()
     spatial_wav, binaural_paths = spatial_8stem.render_stems(
         stems, sr, job_id, trajectories, levels,
-        progress=lambda msg: _progress(6, msg))
+        progress=lambda msg: _progress(6, msg), plan=plan)
     _progress(6, "HRTF render done [" + str(round(time.time()-t, 1)) + "s]")
 
     # Step 7: export
@@ -344,8 +347,8 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
             "name":         name,
             "label":        layout["label"],
             "layer":        layout["layer"],
-            "azimuth":      layout["azimuth"],
-            "distance":     layout["distance"],
+            "azimuth":      plan.get(name, {}).get("azimuth", layout["azimuth"]),
+            "distance":     plan.get(name, {}).get("distance", layout["distance"]),
             "color":        layout["color"],
             "contains":     layout["contains"],
             "active":       lv["active"] and name in binaural_paths,

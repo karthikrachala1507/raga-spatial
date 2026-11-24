@@ -145,6 +145,7 @@ export default function App() {
   const [currentTime,  setCurrentTime]  = useState(0)
   const [instruments,  setInstruments]  = useState([])
   const [dragging,     setDragging]     = useState(false)
+  const [motionOn,     setMotionOn]     = useState(false)
   const audioRef  = useRef(null)
   const pollRef   = useRef(null)
   const timelineRef = useRef(null)
@@ -165,6 +166,7 @@ export default function App() {
     if (!file) return
     const form = new FormData()
     form.append("file", file)
+    form.append("motion", motionOn ? "true" : "false")
     setStatus("uploading"); setProgress(5); setMessage("Uploading...")
     try {
       const res = await axios.post(API + "/upload", form)
@@ -283,6 +285,10 @@ export default function App() {
               <>
                 <div className="drop-filename">{file.name}</div>
                 <div className="drop-size">{(file.size / 1024 / 1024).toFixed(1)} MB</div>
+                <label className="motion-toggle" style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0", cursor: "pointer" }}>
+                  <input type="checkbox" checked={motionOn} onChange={(e) => setMotionOn(e.target.checked)} />
+                  Moving instruments (experimental, off by default)
+                </label>
                 <button className="btn-primary" onClick={handleUpload}>
                   Process Song →
                 </button>

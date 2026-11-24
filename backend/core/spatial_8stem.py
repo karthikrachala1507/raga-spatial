@@ -114,12 +114,68 @@ def name_instruments(stem_name, detection_windows, top_n=3):
              "window_count":   counts[l]} for l in ranked[:top_n]]
 
 
+# ── Placement planner ─────────────────────────────────────────────────────────
+
+MIN_ANGLE_GAP  = 35.0    # degrees: two stems closer than this must differ in depth
+MIN_DEPTH_GAP  = 0.20    # distance units
+FRONT_RESERVED = 20.0    # +/- degrees kept for the vocals (and bass) when they play
+PLAN_PRIORITY  = ["vocals", "bass", "percussion", "plucked_strings", "wind",
+                  "bowed_strings", "keys_synth", "folk_texture"]
+
+
+def _angle_gap(a, b):
+    return abs(((a - b + 180.0) % 360.0) - 180.0)
+
+
+def plan_layout(active):
+    """
+    Choose an azimuth and distance for each ACTIVE stem.
+
+    A stem keeps its home position unless that collides with a stem already
+    placed: closer than MIN_ANGLE_GAP degrees AND closer than MIN_DEPTH_GAP in
+    depth. Stems far enough apart in either angle or depth may share a region
+    of the stage. Stems that are absent leave their space free, and the front
+    centre stays with the vocals while they are playing. Deterministic.
+    Returns {stem: {"azimuth": deg, "distance": d}}.
+    """
+    placed = {}
+    for name in PLAN_PRIORITY:
+        if name not in active or name not in STEM_LAYOUT:
+            continue
+        home, dist = float(STEM_LAYOUT[name]["azimuth"]), STEM_LAYOUT[name]["distance"]
+
+        def free(az):
+            if name not in ("vocals", "bass") and "vocals" in placed                     and _angle_gap(az, 0.0) < FRONT_RESERVED:
+                return False
+            for other in placed.values():
+                if (_angle_gap(az, other["azimuth"]) < MIN_ANGLE_GAP
+                        and abs(dist - other["distance"]) < MIN_DEPTH_GAP):
+                    return False
+            return True
+
+        chosen = home
+        if not free(home):
+            for step in range(1, 10):
+                found = None
+                for sign in (1, -1):
+                    cand = (home + sign * 25.0 * step) % 360.0
+                    if free(cand):
+                        found = cand
+                        break
+                if found is not None:
+                    chosen = found
+                    break
+        placed[name] = {"azimuth": round(chosen, 1), "distance": dist}
+    return placed
+
+
+
 # ── Trajectories ──────────────────────────────────────────────────────────────
 
-def build_trajectory(stem_name, motion_events, duration_sec):
+def build_trajectory(stem_name, motion_events, duration_sec, base=None):
     """Azimuth of a stem over time. Returns (azimuths, in_motion flags)."""
     from core.spatial import _motion_azimuth
-    base  = float(STEM_LAYOUT[stem_name]["azimuth"])
+    base  = float(STEM_LAYOUT[stem_name]["azimuth"] if base is None else base)
     n     = int(np.ceil(duration_sec / TRAJECTORY_RES_SEC)) + 1
     az    = np.full(n, base, dtype=np.float32)
     moving = np.zeros(n, dtype=bool)
@@ -143,7 +199,7 @@ def build_trajectory(stem_name, motion_events, duration_sec):
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
-def render_stems(stems, sr, job_id, trajectories=None, levels=None, progress=None):
+def render_stems(stems, sr, job_id, trajectories=None, levels=None, progress=None, plan=None):
     """
     Place every stem at its position and depth and mix to binaural stereo.
 
@@ -166,7 +222,9 @@ def render_stems(stems, sr, job_id, trajectories=None, levels=None, progress=Non
             continue
         layout = STEM_LAYOUT[name]
         audio  = np.pad(stems[name].astype(np.float32), (0, n - len(stems[name])))
-        dist   = layout["distance"]
+        plan_i = (plan or {}).get(name, {})
+        dist   = plan_i.get("distance", layout["distance"])
+        azim   = plan_i.get("azimuth", layout["azimuth"])
         trim   = 10.0 ** (layout["trim_db"] / 20.0)
         if progress:
             progress("Placing " + layout["label"] + " (layer " + str(layout["layer"]) + ")")
@@ -176,7 +234,7 @@ def render_stems(stems, sr, job_id, trajectories=None, levels=None, progress=Non
             binaural = hrtf.spatialise_trajectory(dry, trajectories[name],
                                                   TRAJECTORY_RES_SEC, sofa, sr)
         else:
-            binaural = hrtf.spatialise_static(dry, layout["azimuth"], sofa, sr)
+            binaural = hrtf.spatialise_static(dry, azim, sofa, sr)
         if name != "bass":                    # reverb on bass only muddies it
             binaural = binaural + hrtf.reverb_tail(audio, dist, sr, seed=seed + 1) * trim
         placed[name] = binaural

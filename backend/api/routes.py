@@ -7,7 +7,7 @@ import time
 import json
 import shutil
 import threading
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter()
@@ -53,7 +53,7 @@ def _update_job(job_id, **kwargs):
             JOBS[job_id].update(kwargs)
 
 
-def _run_pipeline_thread(job_id, audio_path):
+def _run_pipeline_thread(job_id, audio_path, motion=False):
     """Run full pipeline in background thread."""
     try:
         _update_job(job_id, status="running", step=1,
@@ -67,6 +67,7 @@ def _run_pipeline_thread(job_id, audio_path):
             audio_path        = audio_path,
             job_id            = job_id,
             progress_callback = progress,
+            motion            = motion,
         )
 
         _update_job(job_id,
@@ -88,7 +89,7 @@ def _run_pipeline_thread(job_id, audio_path):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/upload")
-async def upload_song(file: UploadFile = File(...)):
+async def upload_song(file: UploadFile = File(...), motion: bool = Form(False)):
     """
     Upload a song and start the full Raga Spatial pipeline.
 
@@ -130,7 +131,7 @@ async def upload_song(file: UploadFile = File(...)):
     # Start pipeline in background thread
     thread = threading.Thread(
         target = _run_pipeline_thread,
-        args   = (job_id, save_path),
+        args   = (job_id, save_path, motion),
         daemon = True,
     )
     thread.start()
