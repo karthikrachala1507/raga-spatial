@@ -39,7 +39,7 @@ from training.analyze_reference_songs import SONGS, OUT_DIR, find_song, ffmpeg_e
 
 TAGS_DIR = os.path.join(OUT_DIR, "mix_tags")
 TRUTH    = os.path.join(OUT_DIR, "truth.json")
-MODELS   = [("v3", ""), ("v4", "_v4"), ("v5", "_v5"), ("v6", "_v6"), ("v7", "_v7")]
+MODELS   = [("v3", ""), ("v4", "_v4"), ("v5", "_v5"), ("v6", "_v6"), ("v7", "_v7"), ("v8", "_v8")]
 CATS = ["percussion", "plucked_strings", "bowed_strings", "wind", "keys_synth", "vocals", "bass"]
 
 # keyword (lower case, in the AudioSet label) -> category; first match wins
