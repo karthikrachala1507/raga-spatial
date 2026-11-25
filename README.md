@@ -1091,6 +1091,12 @@ In order:
 
 ---
 
+## 15a. v8 and the 60-song benchmark (25 Nov 2026)
+
+v8 (9 stems, started from v6, five epochs, SDR 3.2 dB) scored 80% recall on the 11-song scorecard, level with v5, with 4 false flags per song set against 9 for v5. One song (Unakku Thaan) lost 25 points, so the promotion rule kept v5 as the app model.
+
+The 60-song benchmark (random 60 s excerpts from a personal folder, truth from BEATs tags) gave 100% recall for v5, v6, v7 and v8, and 0.62-0.72 flags per song. The models cannot be told apart on it, so nothing changed. Vocal dominance and the bass sink remain open.
+
 ## 16. Environment
 
 | Item | Value |
