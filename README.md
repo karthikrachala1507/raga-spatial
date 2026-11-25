@@ -944,7 +944,7 @@ The project then sat untouched for five months.
 |---|---|---|
 | NumPy silently upgraded to 2.x (at least 3 times) | other pip installs | `pip install numpy==1.26.4 --force-reinstall`; check after every install. |
 | "PyTorch >= 2.4 is required" message | the `transformers` package | Harmless. Ignore. |
-| ffmpeg popup about `gdk_pixbuf` | conda/GTK DLL conflict | Cosmetic. Click OK. |
+| ffmpeg popup "Entry Point Not Found" in `gdk_pixbuf-2.0-0.dll` | the ffmpeg inside the Python environment is broken | 25 Nov: `env.bat` puts the bundled static ffmpeg first on PATH. |
 | Git push rejected, huge repo | venv, models and outputs were committed | History rewritten; `.gitignore`. |
 | "Site can't be reached" for the UI | the dev server is on port 3000, not 5173 | Open `localhost:3000`. |
 | Edits "not taking effect" | files copied into the wrong folder | One project folder; launch scripts; every path from `paths.py`. |

@@ -13,3 +13,6 @@ set "npm_config_cache=%RAGA_CACHE%\npm"
 set "NUMBA_CACHE_DIR=%~dp0data\numba_cache"
 if not exist "%NUMBA_CACHE_DIR%" mkdir "%NUMBA_CACHE_DIR%"
 call "C:\ProgramData\miniconda3\condabin\conda.bat" activate "%~dp0env"
+rem The environment's own ffmpeg.exe does not start (it shows an "Entry Point Not
+rem Found" box), so the working bundled one goes first on PATH.
+set "PATH=%~dp0env\Lib\site-packages\static_ffmpeg\bin\win32;%PATH%"
