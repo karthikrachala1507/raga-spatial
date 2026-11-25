@@ -5,7 +5,7 @@ rem Pause: press Ctrl+C (answer Y). Resume: run this file again.
 rem It continues from the last finished epoch (data\checkpoints\separator_v3_latest.pt).
 call "%~dp0env.bat"
 if errorlevel 1 (
-    echo ERROR: could not activate the raga-spatial conda environment.
+    echo ERROR: could not set up the project environment, see env.bat.
     exit /b 1
 )
 cd /d "%~dp0backend"

@@ -12,7 +12,7 @@ rem Earlier models are never overwritten. Pause with Ctrl+C (answer Y); run this
 rem file again to continue (the fine-tune resumes from its last epoch).
 call "%~dp0env.bat"
 if errorlevel 1 (
-    echo ERROR: could not activate the raga-spatial conda environment.
+    echo ERROR: could not set up the project environment, see env.bat.
     exit /b 1
 )
 set "LOG=%~dp0data\logs\pipeline_progress.log"

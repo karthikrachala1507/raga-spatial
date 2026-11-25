@@ -1141,11 +1141,14 @@ The 60-song benchmark (random 60 s excerpts from a personal folder, truth from B
 | Git | `github.com/karthikrachala1507/raga-spatial`, branch `main` |
 | Disk | project, environment, datasets, models, caches and temp files on D: |
 
-Since 25 November 2026 everything the project reads or writes is under
-`D:\raga-spatial`, set up by `env.bat`. The song folders used for evaluation
-are copied to `data\songs`. Only the Miniconda program itself and Node stay on
-C:. Moving the project folder means re-creating `env\` (conda environments
-hold their own path).
+Since 25 November 2026 the project is self-contained under `D:\raga-spatial`:
+its Python (`env\`), its Node (`tools\node\`, a copy of Node 24), caches, temp
+files and the evaluation songs (`data\songs`). `env.bat` sets this up without
+using the Miniconda or Node installed on C:; the tests pass with both removed
+from PATH. Other programs on the machine still use the C: installs, so they can
+stay. Always start things through a `start_*.bat` file, or `call env.bat`
+first, otherwise the C: tools are picked up again. Moving the project folder
+means re-creating `env\` (conda environments hold their own path).
 
 After any `pip install`, check the locked versions:
 

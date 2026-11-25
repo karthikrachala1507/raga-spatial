@@ -16,7 +16,7 @@ rem this file again to continue. Step times are written to
 rem   data\logs\pipeline_progress.log
 call "%~dp0env.bat"
 if errorlevel 1 (
-    echo ERROR: could not activate the raga-spatial conda environment.
+    echo ERROR: could not set up the project environment, see env.bat.
     exit /b 1
 )
 set "LOG=%~dp0data\logs\pipeline_progress.log"

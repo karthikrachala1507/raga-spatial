@@ -30,3 +30,6 @@ __pycache__/
 
 # the project's own Python environment
 env/
+
+# portable tools copied into the project
+tools/
