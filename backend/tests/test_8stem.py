@@ -68,6 +68,14 @@ def units():
     err = float(np.abs(stems.sum(0) - x)[4096:-4096].max())
     results.append(check("full-band stems add back up to the input", err < 1e-4, "max error %.1e" % err))
     results.append(check("a near-silent stem is treated as absent", shares[3] == 0.0))
+
+    import subprocess
+    from core import audio_io
+    src = os.path.join(_BACKEND, "tests", "test_song.flac")
+    m4a = os.path.join(tempfile.gettempdir(), "raga_test.m4a")
+    subprocess.run([audio_io.ffmpeg_exe(), "-y", "-v", "error", "-i", src, "-t", "5", "-vn", m4a], check=True)
+    y, _ = audio_io.load(m4a, SR, mono=False)
+    results.append(check("M4A uploads can be read", abs(y.shape[-1] / SR - 5.0) < 0.2))
     return all(results)
 
 
@@ -110,10 +118,10 @@ def pipeline():
     ref = normalize_audio(ref)
     n = min(len(ref), len(total))
     err = float(np.abs(total[:n] - ref[:n])[4096:-4096].max())
-    results.append(check("the 8 stems add back up to the song", err < 2e-3, "max error %.4f" % err))
+    results.append(check("the stems add back up to the song", err < 2e-3, "max error %.4f" % err))
     results.append(check("stems are full bandwidth (44.1 kHz)", fs == 44100))
-    results.append(check("8 stems described, layers 1 to 8",
-                         [s["layer"] for s in out["stems8"]] == list(range(1, 9))))
+    results.append(check("9 stems described, layers 1 to 9",
+                         [s["layer"] for s in out["stems8"]] == list(range(1, 10))))
     mp3s = glob.glob(os.path.join(_BACKEND, "outputs", "spatial", "t8test_*_binaural.mp3"))
     active = [s for s in out["stems8"] if s["active"]]
     results.append(check("one binaural file per active stem", len(mp3s) == len(active),

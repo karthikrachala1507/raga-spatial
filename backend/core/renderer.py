@@ -87,7 +87,7 @@ def run_full_pipeline(audio_path, job_id, progress_callback=None, motion=False):
             tempo, beats, onsets, pipeline_start, _progress, motion)
 
     # Step 2: Source separation
-    _progress(2, "Separating stems (MelBandRoformer)...")
+    _progress(2, "Separating stems (BS-Roformer)...")
     t = time.time()
     from core.separator_2stem import separate_stems
     stems = separate_stems(audio, sr, job_id)
@@ -223,27 +223,27 @@ def _run_8stem_pipeline(audio_path, job_id, audio, sr, duration_sec,
     own azimuth and depth layer and render to binaural.
     """
     import soxr
-    from core import separator_8stem, spatial_8stem
+    from core import separator_8stem, separator_2stem, spatial_8stem
     from core.spatial_8stem import STEM_LAYOUT, STEM_ORDER
 
     # Step 2: separation
     _progress(2, "Separating into 8 stems...")
     t = time.time()
-    models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-    # Default is "pure". Hybrid mode (MelBandRoformer vocals) is off unless asked
-    # for: that checkpoint loads with 842 missing weights, and its vocals do not
-    # add back up to the song (error 0.15). The custom model's own vocals reach
-    # 6.5 dB on coherent mixes.
-    want_hybrid = (os.environ.get("RAGA_SEP8_MODE", "pure") == "hybrid"
-                   and os.path.exists(os.path.join(models_dir, "MelBandRoformer.ckpt")))
+    # Hybrid (default): BS-Roformer takes the vocals out first (about 17 dB against
+    # about 11 dB for the custom model on MUSDB songs), the custom model splits the
+    # rest. It needs a free GPU; otherwise, or with RAGA_SEP8_MODE=pure, the custom
+    # model does everything.
+    mode        = os.environ.get("RAGA_SEP8_MODE", "auto")
+    want_hybrid = (mode == "hybrid"
+                   or (mode == "auto" and separator_2stem.is_usable()))
     two_stem = {}
     if want_hybrid:
         try:
-            _progress(2, "Extracting vocals (MelBandRoformer)...")
+            _progress(2, "Extracting vocals (BS-Roformer)...")
             from core.separator_2stem import separate_stems
             two_stem = separate_stems(audio, sr, job_id)
         except Exception as e:
-            print("[Pipeline] MelBandRoformer failed (" + str(e) + "), using the 8-stem model alone")
+            print("[Pipeline] BS-Roformer failed (" + str(e) + "), using the 8-stem model alone")
             two_stem = {}
     sep = separator_8stem.separate_8stems(
         audio, sr, job_id,
@@ -443,8 +443,8 @@ def get_pipeline_status():
             status[name] = "error: " + str(e)
 
     models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
-    status["melband_model"] = "ok" if os.path.exists(
-        os.path.join(models_dir, "MelBandRoformer.ckpt")) else "missing"
+    status["vocal_model"]   = "ok" if os.path.exists(
+        os.path.join(models_dir, "model_bs_roformer_ep_317_sdr_12.9755.ckpt")) else "missing"
     status["beats_model"]   = "ok" if os.path.exists(
         os.path.join(models_dir, "BEATs_iter3_plus_AS2M_finetuned_cpt2.pt")) else "missing"
     status["sofa_file"]     = "ok" if os.path.exists(

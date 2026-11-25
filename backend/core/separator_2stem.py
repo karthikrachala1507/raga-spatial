@@ -1,7 +1,13 @@
 # Raga Spatial - core/separator_2stem.py
-# MelBandRoformer source separation: vocals + instrumental.
+# BS-Roformer (viperx, ep 317, SDR 12.97) source separation: vocals + instrumental.
 # Used alone when no 8-stem model exists, and for the vocals in hybrid mode.
+#
+# Until 25 Nov 2026 this loaded MelBandRoformer.ckpt into a newer version of the
+# bs_roformer package with strict=False; 842 weights stayed random, so the vocals
+# were wrong. The checkpoint predates the package's hyper connections, so they are
+# switched off here and the weights are loaded strictly.
 
+import re
 import torch
 import numpy as np
 import soundfile as sf
@@ -11,13 +17,24 @@ import os
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
 STEMS_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "outputs", "stems")
 
-MELBAND_MODEL = os.path.join(MODELS_DIR, "MelBandRoformer.ckpt")
+VOCAL_MODEL = os.path.join(MODELS_DIR, "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
 
 TARGET_SR  = 44100
 CHUNK_SIZE = 352800
-OVERLAP    = 4
+OVERLAP    = 2          # 4 took twice as long for the same quality (25 Nov 2026)
 MIN_CHUNK  = 8192
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def is_usable():
+    """True when the checkpoint is there and the GPU has room (about 4 GB)."""
+    if not os.path.exists(VOCAL_MODEL) or not torch.cuda.is_available():
+        return False
+    try:
+        free, _ = torch.cuda.mem_get_info()
+    except Exception:
+        return False
+    return free > 4.0e9
 
 
 def separate_stems(audio, sr, job_id):
@@ -29,6 +46,9 @@ def separate_stems(audio, sr, job_id):
     print("[Separator] Audio tensor shape: " + str(audio_tensor.shape))
     print("[Separator] Separating stems...")
     vocals_audio, instrumental_audio = run_separation(model, audio_tensor, sr)
+    del model                      # the 8-stem model and BEATs need the GPU memory next
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
     vocals_path       = os.path.join(STEMS_DIR, job_id + "_vocals.wav")
     instrumental_path = os.path.join(STEMS_DIR, job_id + "_instrumental.wav")
     save_stem(vocals_audio, sr, vocals_path)
@@ -38,49 +58,38 @@ def separate_stems(audio, sr, job_id):
 
 
 def load_model():
-    from bs_roformer import MelBandRoformer
+    from bs_roformer import BSRoformer
 
-    # Only MelBandRoformer.ckpt fits this model (dim=384). The BSRoformer
-    # checkpoint that used to be tried as a fallback has dim=512 and always
-    # failed with a size mismatch, so it is no longer loaded.
-    if not os.path.exists(MELBAND_MODEL):
-        raise FileNotFoundError("MelBandRoformer.ckpt not found in " + MODELS_DIR)
-    model_path = MELBAND_MODEL
-    print("[Separator] Loading MelBandRoformer from: " + MELBAND_MODEL)
+    if not os.path.exists(VOCAL_MODEL):
+        raise FileNotFoundError(os.path.basename(VOCAL_MODEL) + " not found in " + MODELS_DIR)
+    print("[Separator] Loading BS-Roformer from: " + VOCAL_MODEL)
 
-    model = MelBandRoformer(
-        dim=384,
-        depth=6,
+    model = BSRoformer(
+        dim=512,
+        depth=12,
         stereo=True,
         num_stems=1,
-        time_transformer_depth=2,
-        freq_transformer_depth=2,
-        num_bands=60,
+        time_transformer_depth=1,
+        freq_transformer_depth=1,
         dim_head=64,
         heads=8,
         mask_estimator_depth=2,
+        stft_hop_length=441,
+        num_residual_streams=1,          # plain residuals, as the checkpoint was trained
     )
+    # the checkpoint has no "value residual" layers either
+    for module in model.modules():
+        if hasattr(module, "to_value_residual_mix"):
+            module.to_value_residual_mix = None
 
-    checkpoint = torch.load(model_path, map_location=DEVICE)
-    if "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    elif "model" in checkpoint:
-        state_dict = checkpoint["model"]
-    else:
-        state_dict = checkpoint
-
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        new_key = k.replace("model.", "")
-        new_state_dict[new_key] = v
-
-    result     = model.load_state_dict(new_state_dict, strict=False)
-    missing    = len(result.missing_keys)
-    unexpected = len(result.unexpected_keys)
-    print("[Separator] Loaded. Missing: " + str(missing) + " Unexpected: " + str(unexpected))
-    model = model.to(DEVICE)
-    model.eval()
-    return model
+    checkpoint = torch.load(VOCAL_MODEL, map_location="cpu")
+    state_dict = checkpoint.get("state_dict", checkpoint.get("model", checkpoint))
+    # the package now wraps each attention / feed-forward block in ".branch"
+    state_dict = {re.sub(r"^(layers\.\d+\.\d+\.layers\.\d+\.\d+)\.", r"\g<1>.branch.", k): v
+                  for k, v in state_dict.items()}
+    model.load_state_dict(state_dict)    # strict: a wrong checkpoint must fail loudly
+    print("[Separator] Loaded all " + str(len(state_dict)) + " weights")
+    return model.to(DEVICE).eval()
 
 
 def prepare_audio_tensor(audio, sr):
@@ -95,12 +104,19 @@ def prepare_audio_tensor(audio, sr):
     return tensor.to(DEVICE)
 
 
+def infer(model, x):
+    if DEVICE == "cuda":
+        with torch.autocast("cuda", dtype=torch.float16):
+            return model(x).float()
+    return model(x)
+
+
 def run_separation(model, audio_tensor, sr):
     with torch.no_grad():
         total_samples = audio_tensor.shape[-1]
         if total_samples <= CHUNK_SIZE * 2:
             print("[Separator] Short audio - single pass inference")
-            vocals_tensor = model(audio_tensor)
+            vocals_tensor = infer(model, audio_tensor)
             orig_len      = total_samples
             vocals        = vocals_tensor.squeeze(0).cpu().numpy()
             if vocals.ndim == 3:
@@ -151,7 +167,7 @@ def process_in_chunks(model, audio_tensor):
         chunk_in = chunk.unsqueeze(0).to(DEVICE)
 
         with torch.no_grad():
-            out = model(chunk_in)
+            out = infer(model, chunk_in)
 
         out_np = out.squeeze(0).cpu().numpy()
         if out_np.ndim == 3:
@@ -179,9 +195,6 @@ def process_in_chunks(model, audio_tensor):
     count  = np.maximum(count, 1e-8)
     output = output / count[np.newaxis, :]
 
-    # Soft clip to remove convolution artifacts and reduce noise
-    output = np.tanh(output * 0.8) / 0.8
-
     return output
 
 
@@ -190,6 +203,6 @@ def save_stem(audio, sr, path):
     audio = np.clip(audio, -1.0, 1.0)
     if audio.ndim == 2:
         audio = audio.T
-    sf.write(path, audio, sr)
+    sf.write(path, audio, sr, subtype="FLOAT")   # float keeps vocals + instrumental = input
     size_mb = os.path.getsize(path) / (1024 * 1024)
     print("[Separator] Saved: " + path + " (" + str(round(size_mb, 1)) + " MB)")

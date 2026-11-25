@@ -11,7 +11,7 @@
 # add back up to the input.
 #
 # Two modes:
-#   hybrid (default): vocals come from MelBandRoformer (much stronger on
+#   hybrid (default): vocals come from BS-Roformer (much stronger on
 #                     voice); the custom model splits the instrumental into
 #                     the other 7 stems.
 #   pure:             all 8 stems come from the custom model.
@@ -173,19 +173,23 @@ def fullband_stems(mix, estimates_16k, sr):
     shares = (power.sum(dim=(1, 2)) / (power.sum() + 1e-12)).numpy()
 
     eps   = 1e-10 * float(power.max()) + 1e-20
-    total = power.sum(dim=0) + eps
+    # every present stem gets an equal sliver of eps, so the masks add up to 1 even
+    # where all estimates are near zero (hybrid mode: quiet spots left after the voice)
+    present = torch.from_numpy((shares > 0).astype(np.float32))
+    sliver  = present / present.sum().clamp(min=1.0)
+    total   = power.sum(dim=0) + eps
 
     # share of the upper band per frame, smoothed over ~0.2 s
     hf = power[:, hf_from:split].sum(dim=1)                       # (k, frames)
     hf = torch.nn.functional.avg_pool1d(hf[None], 9, stride=1, padding=4)[0]
-    hf_share = hf / (hf.sum(dim=0, keepdim=True) + eps)
+    hf_share = (hf + eps * sliver[:, None]) / (hf.sum(dim=0, keepdim=True) + eps)
 
     stems = np.zeros((k, n), dtype=np.float32)
     mask  = torch.empty((n_bins, mix_tf.shape[1]), dtype=torch.float32)
     for i in range(k):
         if shares[i] <= 0.0:
             continue
-        mask[:split] = power[i] / total
+        mask[:split] = (power[i] + eps * sliver[i]) / total
         mask[split:] = hf_share[i][None, :]
         stems[i] = torch.istft(mix_tf * mask, FB_NFFT, FB_HOP, window=window,
                                length=n).numpy()
@@ -206,7 +210,7 @@ def separate_8stems(audio, sr, job_id, vocals_path=None, instrumental_path=None,
     Split a song into the 8 category stems at full bandwidth.
 
     audio : mono signal at sr (44.1 kHz in the pipeline)
-    vocals_path / instrumental_path : MelBandRoformer outputs -> hybrid mode.
+    vocals_path / instrumental_path : BS-Roformer outputs -> hybrid mode.
     Returns {"mode", "model_epoch", "device", "paths": {stem: wav}, "audio": {stem: array}}
     """
     os.makedirs(STEMS_DIR, exist_ok=True)
@@ -249,12 +253,21 @@ def separate_8stems(audio, sr, job_id, vocals_path=None, instrumental_path=None,
           + ", ".join(names[i] + " " + str(round(float(shares[i]) * 100)) + "%"
                       for i in range(len(names))))
 
+    # for real_motion: these masks are applied to the stereo original, which still
+    # contains the voice, so in hybrid mode the voice estimate is the real vocals
+    motion_names, motion_est = list(names), estimates[keep]
+    if hybrid:
+        voc16 = soxr.resample(vocals, sr, MODEL_SR).astype(np.float32)[:estimates.shape[1]]
+        voc16 = np.pad(voc16, (0, estimates.shape[1] - len(voc16)))
+        motion_names = names + ["vocals"]
+        motion_est   = np.concatenate([estimates[keep], voc16[None]], axis=0)
+
     return {
         "mode":        "hybrid" if hybrid else "pure",
         "model_epoch": epoch,
         "device":      device,
         "paths":       paths,
         "audio":       audio_out,
-        "estimates_16k": estimates[keep],     # for real_motion: masks reused on L and R
-        "names":         names,
+        "estimates_16k": motion_est,          # for real_motion: masks reused on L and R
+        "names":         motion_names,
     }

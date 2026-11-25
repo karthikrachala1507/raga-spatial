@@ -103,9 +103,15 @@ function TimelineBar({ motionEvents, duration, currentTime }) {
         }} />
       </div>
       <div className="timeline-legend">
-        <span style={{color:"#F59E0B"}}>● circular</span>
-        <span style={{color:"#60A5FA"}}>● right→left</span>
-        <span style={{color:"#34D399"}}>● left→right</span>
+        {motionEvents.some((ev) => ev.spatial_motion === "original_pan")
+          ? <span style={{color:"#34D399"}}>● movement measured in the original stereo</span>
+          : motionEvents.length === 0
+            ? <span>No movement (switched off, or none found in the original)</span>
+            : <>
+                <span style={{color:"#F59E0B"}}>● circular</span>
+                <span style={{color:"#60A5FA"}}>● right→left</span>
+                <span style={{color:"#34D399"}}>● left→right</span>
+              </>}
       </div>
     </div>
   )
@@ -363,13 +369,13 @@ export default function App() {
               </div>
               <div className="info-item">
                 <span className="info-label">Dominant instrument</span>
-                <span className="info-val">{result.motion_summary?.dominant_instrument}</span>
+                <span className="info-val">{result.motion_summary?.total_events ? result.motion_summary.dominant_instrument : "none"}</span>
               </div>
               <div className="info-item">
                 <span className="info-label">Stems</span>
                 <span className="info-val">
                   {result.mode === "8-stem"
-                    ? result.stems8.filter((s) => s.active).length + " of 8 active"
+                    ? result.stems8.filter((s) => s.active).length + " of " + result.stems8.length + " active"
                     : "2 (vocals + instrumental)"}
                 </span>
               </div>

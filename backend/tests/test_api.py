@@ -61,7 +61,7 @@ def main():
             return
 
         res = requests.get(BASE + "/result/" + job, timeout=30).json()
-        check("result is 8-stem, pure mode", res.get("mode") == "8-stem" and res.get("separation_mode") == "pure",
+        check("result is 8-stem, pure or hybrid", res.get("mode") == "8-stem" and res.get("separation_mode") in ("pure", "hybrid"),
               "%s / %s" % (res.get("mode"), res.get("separation_mode")))
         stems = res.get("stems8", [])
         check("result lists 9 stems with layers 1-9", [s["layer"] for s in stems] == list(range(1, 10)))

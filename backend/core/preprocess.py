@@ -120,8 +120,8 @@ def load_audio(file_path: str) -> tuple:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Audio file not found: {file_path}")
 
-    # librosa handles MP3, WAV, FLAC, AAC automatically
-    audio, sr = librosa.load(file_path, sr=TARGET_SR, mono=True)
+    from core import audio_io          # librosa alone cannot read M4A / AAC here
+    audio, sr = audio_io.load(file_path, TARGET_SR, mono=True)
     return audio, sr
 
 

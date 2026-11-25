@@ -33,7 +33,7 @@ def test_separator():
     sr = preprocessed["sr"]
     print("    Duration: " + str(round(preprocessed["duration"], 1)) + "s")
 
-    print("\n[2] Running MelBandRoformer separation...")
+    print("\n[2] Running BS-Roformer separation...")
     print("    This will take 1-3 minutes on RTX 3060...")
     start = time.time()
 

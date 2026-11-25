@@ -39,23 +39,22 @@ without any other context.
 
 ## 1. Status at a glance
 
+State on 25 November 2026.
+
 | Part | State |
 |---|---|
-| 2-stem app (vocals + instrumental) | Works. Kept as a fallback. |
-| 8-stem backend (separation, positions, depth, rendering) | Works end to end. Tested on a 30 s song and a 5 min song. |
-| 8-zone UI with live stem mixer | Works. Checked in a browser. |
-| Training pipeline | Works. Pause and resume are safe. |
-| Training data | 9 open datasets (incl. Saraga Audiovisual) plus the older FreeSounds/YouTube clips; all converted. Folk / texture clips cleaned. Coherent (same-song) stems cut for all 5 multitrack datasets. |
-| **8-stem model (v3)** | **Trained: 100 of 100 epochs (finished 18 Nov).** Best checkpoint epoch 93: random mixes 3.50 dB, coherent mixes 6.62 dB. Five stems are at 6 dB or better on coherent mixes; keys is weak (1.5 dB). Not studio quality. |
-| Training | **Finished.** Nothing is running. |
-| Slakh conversion | Done (20,676 of 20,676 stems). |
-| Coherent cutting | Done for URMP, MUSDB18-HQ, Saraga Carnatic, Slakh (900 tracks) and Saraga Audiovisual. |
+| App: upload, separation, instrument names, placement, binaural output, web page | Complete; tested end to end ([section 9d onward](#9d-reference-song-analysis-23-november-2026)). |
+| Stems | 9, placed by direction and depth, with a live mixer. |
+| Vocals | BS-Roformer (pre-trained), on by default when the GPU has room. |
+| Instruments | Custom model v5. v6, v7 and v8 were trained; none replaced it. |
+| Motion | Optional, off by default; follows movement measured in the original stereo. |
+| Quality | 76% mean recall on 11 reference songs ([section 9e onward](#9e-real-song-scorecard-and-fine-tunes-v4-to-v6-23-24-november-2026)). Not studio quality. |
+| Training | Nothing is running. |
 
-**The honest summary:** all the software is built and tested. The model that
-does the actual separating has barely started learning, so stems from a real
-song still have heavy bleed. It needs days of training. One data problem
-([section 14](#14-the-folk--texture-problem)) was fixed on 13 November; the
-model has not been trained on the cleaned data yet, so the fix is unproven.
+**The honest summary:** the app works. The instrument split is usable for
+spatial placement but still misses instruments and bleeds on real songs,
+especially for Indian instruments with no clean training data. Nobody has yet
+judged the output by ear against a checklist.
 
 **How to read the dB numbers** (SDR, explained in the [glossary](#18-glossary)):
 
@@ -125,10 +124,12 @@ raga-spatial\
 │   ├── .env                   FreeSounds key (not in git; see .env.example)
 │   ├── core\                  the audio pipeline
 │   │   ├── preprocess.py        load audio, tempo, onsets, chroma
-│   │   ├── separator_2stem.py   MelBandRoformer: vocals + instrumental
+│   │   ├── separator_2stem.py   BS-Roformer: vocals + instrumental
 │   │   ├── separator_8stem.py   the custom model: 8 full-bandwidth stems
 │   │   ├── bsrnn.py             the 8-stem model itself
 │   │   ├── detector.py          BEATs: names the instruments in each stem
+│   │   ├── real_motion.py       movement measured in the original stereo
+│   │   ├── audio_io.py          reads every upload format, M4A included
 │   │   ├── audioset_labels.csv  Google's public AudioSet class names (fills the label gaps)
 │   │   ├── motion.py            finds melodic runs that should move in space
 │   │   ├── spatial.py           positions by instrument label (2-stem path)
@@ -149,7 +150,7 @@ raga-spatial\
 │   │   ├── clean_folk_texture.py  keeps only folk clips that are percussion
 │   │   └── augment_mix.py         legacy: writes fixed mixes (no longer needed)
 │   ├── tests\                 test_8stem.py, test_api.py, the phase tests, test_song.flac
-│   ├── models\                MelBandRoformer, BEATs and HRTF files used by the app
+│   ├── models\                BS-Roformer, BEATs and HRTF files used by the app
 │   └── outputs\               what the app produces for each uploaded song
 │
 ├── frontend\                  the React UI
@@ -203,14 +204,21 @@ binaural mix (WAV) + one binaural file per stem (MP3) + 8 dry stems (WAV) + JSON
 
 **Step 2 in detail.** There are two modes:
 
-- **pure (default):** all 8 stems come from the custom model.
-- **hybrid:** MelBandRoformer extracts the vocals and the custom model splits
-  the rest into 7 stems. Set `RAGA_SEP8_MODE=hybrid`. **Not recommended**: on
-  18 Nov 2026 the MelBandRoformer checkpoint was found to load with 842
-  missing and 120 unexpected weights (it does not match its architecture), and
-  in hybrid mode the 8 stems no longer add back up to the song (error 0.15
-  instead of 0.0004). The custom model's own vocals reach 6.5 dB on coherent
-  mixes.
+- **hybrid (default since 25 Nov 2026):** BS-Roformer takes the vocals out of
+  the song and the custom model splits the rest. Used when at least 4 GB of GPU
+  memory is free.
+- **pure:** all stems come from the custom model. Used when the GPU is busy or
+  absent, or with `RAGA_SEP8_MODE=pure`.
+
+Vocal quality on 8 excerpts rebuilt from real stems (SI-SDR, higher is better):
+
+| Excerpts | BS-Roformer | custom model v5 |
+|---|---|---|
+| 3 MUSDB18 songs | 17.5 to 19.8 dB | 8.7 to 13.7 dB |
+| 5 Saraga Carnatic / folk recordings | 0.0 to 11.2 dB | -3.5 to 7.5 dB |
+
+BS-Roformer was better on all 8. Saraga stems contain bleed from other
+instruments, so those figures are rough.
 
 **Full-bandwidth trick.** The custom model works at 16 kHz mono, which on its
 own would cut every stem off at 8 kHz. Instead, its output is used only to
@@ -227,7 +235,7 @@ overlapping blocks, each with the HRTF of its own direction.
 
 ### 2-stem path (fallback when no 8-stem model exists)
 
-MelBandRoformer gives vocals and instrumental. BEATs labels the mix. Each
+BS-Roformer gives vocals and instrumental. BEATs labels the mix. Each
 label has a fixed position. This was the whole app before November 2026.
 Its limit: every instrument sits in one "instrumental" stem at one position.
 
@@ -235,7 +243,7 @@ Its limit: every instrument sits in one "instrumental" stem at one position.
 
 | Environment variable | Effect |
 |---|---|
-| `RAGA_SEP8_MODE=hybrid` | use MelBandRoformer for the vocals (off by default, see section 4) |
+| `RAGA_SEP8_MODE=pure` or `hybrid` | force one mode (default: hybrid when the GPU has room) |
 | `RAGA_FORCE_2STEM=1` | use the 2-stem path even if an 8-stem model exists |
 | `RAGA_SKIP_DETECT=1` | skip BEATs instrument naming (faster) |
 | `RAGA_DEVICE=cpu` or `cuda` | force where the 8-stem model runs |
@@ -312,7 +320,7 @@ one stem, and BEATs names the instruments inside it.
 
 | Model | File | Job | Notes |
 |---|---|---|---|
-| MelBandRoformer | `backend\models\MelBandRoformer.ckpt` | vocals + instrumental at 44.1 kHz | dim 384. Downloaded, not trained here. |
+| BS-Roformer | `backend\models\model_bs_roformer_ep_317_sdr_12.9755.ckpt` | vocals + instrumental at 44.1 kHz | dim 512, depth 12. Downloaded, not trained here. |
 | BEATs | `backend\models\BEATs_iter3_plus_AS2M_finetuned_cpt2.pt` | names instruments (527 AudioSet classes) | Western bias; Carnatic vocals are sometimes labelled "Speech". |
 | MIT KEMAR HRTF | `backend\models\mit_kemar_normal_pinna.sofa` | binaural rendering | 710 directions, 512 taps, 44.1 kHz. |
 | Custom band-split RNN (v3) | `data\checkpoints\separator_v3_best.pt` | the 8 stems | Trained in this project. 9.5M parameters. |
@@ -738,6 +746,39 @@ used by the app. Trap: scripts run with the env's python.exe directly need
 `nvrtc-builtins64_118.dll`.
 
 
+### Hybrid mode on the reference songs (25 November 2026)
+
+The same 11-song scorecard, with BS-Roformer taking the vocals out first:
+
+| Setup | Mean recall | Mean flags per song |
+|---|---|---|
+| v5, pure | 69% | 1.9 |
+| v6, pure | 72% | 1.7 |
+| **v5, hybrid (app default)** | **76%** | **1.6** |
+| v6, hybrid | 74% | 1.7 |
+
+The vocal share fell where it was implausibly high (Kun Faya Kun 87% to 59%,
+Unakku Thaan 62% to 54%, Peydhavi 70% to 60%). One song got worse: on
+"Ordinary Person" the voice stem fell from 45% to 7% and Folk / Texture rose
+from 15% to 51%. v5 stays as the instrument model. The "truth" behind recall is
+partly a guess (`truth.json`), so treat differences of a few points as noise.
+
+### Full app check (25 November 2026)
+
+| Check | Result |
+|---|---|
+| `test_8stem.py` (units, and the pipeline in pure and hybrid mode) | pass |
+| `test_api.py` | pass |
+| `test_separator`, `test_detector`, `test_renderer`, `test_preprocess`, `test_motion`, `test_spatial`, `test_hrtf` | run to completion (they print results, they do not assert much) |
+| Web page: upload, motion checkbox, 9 stems on the map and mixer, playback | works, no console errors |
+| 4 min 45 s M4A song with motion on | 225 s on the RTX 3060 Laptop; 7 stems active, 16 motion events on the wind stem |
+
+Two faults found and fixed on the way: M4A and AAC uploads failed at the first
+step with an empty error message, and in hybrid mode the stems missed the song
+by up to 0.002 where the model heard almost nothing (now 0.0001).
+
+---
+
 ## 10. Experiments and measurements
 
 
@@ -891,6 +932,7 @@ The project then sat untouched for five months.
 | Slakh "first 700 tracks" gave incomplete tracks | files in the archive are not grouped by track | Download the whole archive (resumable), extract stems only, delete the archive. |
 | FreeSounds key in git | hardcoded in `collect_stems.py` | Moved to `backend\.env`. **The old key is still in git history and must be rotated.** |
 | MelBandRoformer loads with 842 missing weights; hybrid stems do not add up to the song | the checkpoint does not match the architecture (this was a suspected issue in June, confirmed 18 Nov) | Default changed to pure mode; hybrid kept as an option, not recommended. |
+| The same, root cause (also for BS-Roformer) | a newer `bs_roformer` package added layers the old checkpoints do not have, and `strict=False` hid it | 25 Nov: load BS-Roformer with those layers switched off, strictly. All 699 weights load and the stems sum to the song. |
 | Windows blocked PyTorch (`Application Control policy has blocked ... caffe2_nvrtc.dll`), then briefly the project folder (access denied) | a Windows security policy; cleared by the owner and a restart | Nothing in the project changed; the owner allowed it in Windows Security. |
 | Real songs landed mostly in the Folk / Texture stem | that category's clips were whole folk songs, found by searches such as "Telugu folk music" | `clean_folk_texture.py` keeps only clips the detector confirms as percussion without voice or melody. |
 
@@ -917,7 +959,7 @@ The project then sat untouched for five months.
 | 1 | **The model is good, not great** | Final: random 3.5 dB, coherent 6.6 dB. Keys 1.5 dB, plucked strings 3.1, folk 2.7 on random mixes. Gains over the last 60 epochs were small, so more epochs will not help much; better data or a bigger model would. |
 | 2 | Folk / texture swallowing real songs | **Fixed**: 4.2% of a real song at epoch 93, down from 64% ([section 14](#14-the-folk--texture-problem)). |
 | 3 | Nobody has listened yet | Every quality claim in this file is a measurement. The stems need human ears. |
-| 4 | Hybrid mode is unreliable | Tested 18 Nov: MelBandRoformer loads with 842 missing weights and the stems no longer sum to the song. Off by default. Fixing it would need the correct checkpoint or config. |
+| 4 | Hybrid mode | **Fixed 25 Nov** ([section 12](#12-errors-met-and-how-they-were-fixed)); on by default. |
 | 5 | Slakh conversion unfinished | 7,308 stems left; about 1 to 2 hours alone. |
 | 6 | Tier 1 data is noisy | YouTube "solos" with accompaniment, lossy previews. |
 | 7 | No clean data for several named instruments | veena, nadaswaram, thavil, bansuri, harmonium, dappu, parai. |
@@ -925,7 +967,7 @@ The project then sat untouched for five months.
 | 9 | Model works at 16 kHz mono | Stems are full-band only through the mask trick in [section 4](#4-how-the-app-works). Above 7.5 kHz the split is approximate. Input is mono; the original stereo image is not used. |
 | 10 | Licences | Three datasets are non-commercial. |
 | 11 | FreeSounds secret | Still needs rotating on the FreeSounds site. |
-| 12 | Three phase tests not re-run | `test_separator.py`, `test_detector.py`, `test_renderer.py` import correctly after the reorganisation but were not executed. |
+| 12 | Phase tests | Run on 25 Nov; all complete. |
 | 13 | Validation includes noisy Tier 1 recordings | The overall median therefore understates quality on clean data. |
 
 ---
@@ -1051,34 +1093,21 @@ take seconds.
 
 ## 15. What is left to do
 
-In order:
+The app is complete and tested. What remains needs a person or data that does
+not exist openly:
 
-1. ~~Decide the Folk / Texture question~~ Done on 13 November: the clips
-   were cleaned ([section 14](#14-the-folk--texture-problem)). What remains is
-   to confirm it after about 10 epochs of training.
-2. **Finish preparing the data and train**: double-click
-   `start_data_then_training.bat`. It runs three steps in order: the Slakh
-   conversion (about 47 minutes), the coherent cutting (about 2 hours,
-   estimated), then training from zero (about 30 minutes per epoch alone, so
-   about 2 days for 100 epochs). 100 is a ceiling; check the scores every 10
-   epochs.
-3. **Watch the coherent score.** It is the number closest to real-song
-   quality. If it stays far below the random score, the model is still
-   learning the easy problem.
-4. **Listen.** The 8 stems of `test5.mp3` (epoch 93) are in
-   `data\evaluation\test5`. Check plucked strings, wind and bass in
-   particular.
-5. ~~Run a real song through the app in hybrid mode~~ Done 18 Nov: hybrid mode
-   is unreliable and was switched off (section 4).
-6. **Rotate the FreeSounds secret.**
-7. **Name Indian instruments**: fine-tune BEATs on Indian instrument labels,
-   or add a small classifier per stem.
-8. **Reference songs.** The owner wants to supply "Ordinary Person" (Leo) and
-   "Infatuation" (100% Love), have their bass character and 360° layering
-   analysed, and then choose which characteristics to train. Not started; the
-   songs have not been provided.
-9. **More data** for veena, nadaswaram, thavil, bansuri, harmonium and folk
-   percussion.
+1. **Listen** to the output on headphones. All quality figures here are
+   measurements.
+2. **Rotate the FreeSounds secret** on the FreeSounds site.
+3. **Correct `data\evaluation\reference_songs\truth.json`**, which is a best
+   guess at what each reference song contains.
+4. **Clean data** for veena, flute, nadaswaram, harmonium and folk percussion;
+   without it these stay weak.
+5. **Name Indian instruments**: fine-tune BEATs or add a small classifier.
+
+Known weak points: plucked and bowed strings and drums are missed in several
+songs, the bass stem takes too much in some, and "Ordinary Person" sends much
+of the song to Folk / Texture.
 
 ### Rules set by the project owner
 

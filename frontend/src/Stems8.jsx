@@ -255,8 +255,8 @@ export default function Stems8View({ api, jobId, result, onTime }) {
           <div className="panel-title">Stem mixer</div>
           <div className="panel-sub">
             {result.separation_mode === "hybrid"
-              ? "Vocals from MelBandRoformer, instruments from the custom 8-stem model"
-              : "All stems from the custom 8-stem model"}
+              ? "Vocals from BS-Roformer, instruments from the custom model"
+              : "All stems from the custom model"}
             {result.model_epoch ? " (epoch " + result.model_epoch + ")" : ""}
           </div>
           {stems.map((s) => {

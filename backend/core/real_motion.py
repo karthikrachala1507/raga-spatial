@@ -21,7 +21,8 @@ the movement instead:
 Vocals and bass are never moved (they stay anchored front and centre).
 """
 import numpy as np
-import librosa
+
+from core import audio_io
 
 HOP_SEC       = 1.0
 SPREAD_MIN    = 0.20
@@ -36,7 +37,7 @@ NEVER_MOVE    = ("vocals", "bass")
 
 
 def load_stereo(path, sr):
-    x, _ = librosa.load(path, sr=sr, mono=False)
+    x, _ = audio_io.load(path, sr, mono=False)
     if x.ndim == 1:
         x = np.stack([x, x])
     return x[:2].astype(np.float32)

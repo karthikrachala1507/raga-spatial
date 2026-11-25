@@ -26,5 +26,5 @@ LOGS_DIR        = os.path.join(DATA_DIR, "logs")                   # training lo
 REAL_SONGS_DIR  = os.path.join(DATA_DIR, "real_songs")             # full songs for listening tests
 EVAL_DIR        = os.path.join(DATA_DIR, "evaluation")             # stems written by evaluate_separator.py
 
-APP_MODELS_DIR  = os.path.join(BACKEND_DIR, "models")              # MelBandRoformer, BEATs, HRTF file
+APP_MODELS_DIR  = os.path.join(BACKEND_DIR, "models")              # BS-Roformer, BEATs, HRTF file
 OUTPUTS_DIR     = os.path.join(BACKEND_DIR, "outputs")             # what the app produces per job

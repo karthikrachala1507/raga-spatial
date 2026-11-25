@@ -82,7 +82,7 @@ def _run_pipeline_thread(job_id, audio_path, motion=False):
         print("[Routes] Pipeline error for job " + job_id + ":\n" + err)
         _update_job(job_id,
                     status  = "error",
-                    message = str(e),
+                    message = str(e) or type(e).__name__,
                     error   = err)
 
 
