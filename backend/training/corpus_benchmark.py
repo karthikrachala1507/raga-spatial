@@ -20,7 +20,7 @@ from core import separator_8stem as sep
 from training.analyze_reference_songs import ffmpeg_exe
 from training import scorecard_reference_songs as sc
 
-FOLDER = r"C:\Users\racha\Desktop\music\antha manolle bro"
+FOLDER = os.path.join(paths.DATA_DIR, "songs", "antha manolle bro")
 OUT = os.path.join(paths.DATA_DIR, "evaluation", "corpus")
 EXC = 60
 TAGS = ["v5", "v6", "v7", "v8"]

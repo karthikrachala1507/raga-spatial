@@ -16,13 +16,15 @@ import soundfile as sf
 
 
 def ffmpeg_exe():
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
+    # The bundled static build comes first: the ffmpeg inside the conda environment
+    # (first on PATH once it is activated) does not start on this machine.
     import static_ffmpeg
     bundled = os.path.join(os.path.dirname(static_ffmpeg.__file__), "bin", "win32", "ffmpeg.exe")
     if os.path.exists(bundled):
         return bundled            # asking static_ffmpeg itself can block on its lock file
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
     from static_ffmpeg import run
     return run.get_or_fetch_platform_executables_else_raise()[0]
 

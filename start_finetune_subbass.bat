@@ -10,7 +10,7 @@ rem
 rem The results are written to data\logs\finetune_subbass_report.txt.
 rem separator_v3_best.pt is never overwritten. Pause with Ctrl+C (answer Y); run
 rem this file again to continue (the fine-tune resumes from its last epoch).
-call "C:\ProgramData\miniconda3\condabin\conda.bat" activate raga-spatial
+call "%~dp0env.bat"
 if errorlevel 1 (
     echo ERROR: could not activate the raga-spatial conda environment.
     exit /b 1

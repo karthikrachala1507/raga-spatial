@@ -10,7 +10,7 @@ rem   Step 3  write the scorecard: v3, v4 and v5 against v7 -> data\evaluation\r
 rem
 rem Earlier models are never overwritten. Pause with Ctrl+C (answer Y); run this
 rem file again to continue (the fine-tune resumes from its last epoch).
-call "C:\ProgramData\miniconda3\condabin\conda.bat" activate raga-spatial
+call "%~dp0env.bat"
 if errorlevel 1 (
     echo ERROR: could not activate the raga-spatial conda environment.
     exit /b 1

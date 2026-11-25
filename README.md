@@ -73,7 +73,7 @@ The two things done most often need no terminal:
 
 | What | How |
 |---|---|
-| Start the app | double-click `start_app.bat`, then use `http://localhost:3000` |
+| Start the app | double-click **Raga Spatial** on the desktop (or `start_app.bat`), then use `http://localhost:3000`. Close its two windows to stop it. |
 | Start or resume training | double-click `start_training.bat` |
 | Finish preparing data, then train | double-click `start_data_then_training.bat` (use this while datasets are still being converted) |
 | Pause training | Ctrl+C in its window. It resumes from the last finished epoch. |
@@ -81,7 +81,7 @@ The two things done most often need no terminal:
 For everything else, open a terminal and go to the backend folder first:
 
 ```cmd
-conda activate raga-spatial
+call D:\raga-spatial\env.bat
 cd /d D:\raga-spatial\backend
 ```
 
@@ -111,6 +111,8 @@ Everything lives in one folder, `D:\raga-spatial`.
 
 ```
 raga-spatial\
+├── env.bat                    shared setup: environment, caches and temp files on D:
+├── env\                       the Python environment (not in git)
 ├── start_app.bat              double-click: starts the app and opens the browser
 ├── start_training.bat         double-click: start or resume training
 ├── start_data_then_training.bat   finish converting datasets, then train
@@ -1131,15 +1133,19 @@ The 60-song benchmark (random 60 s excerpts from a personal folder, truth from B
 | Item | Value |
 |---|---|
 | Machine | Windows 11 laptop, NVIDIA RTX 3060 Laptop GPU (6 GB), 24 GB RAM |
-| Python | 3.11, conda env `raga-spatial` in `C:\ProgramData\miniconda3\envs\raga-spatial` |
+| Python | 3.11, conda environment in `D:\raga-spatial\env` |
 | PyTorch | **2.3.0+cu118 (locked)** |
 | NumPy | **1.26.4 (locked)** |
 | Other packages | `backend\requirements.txt` |
 | Frontend | Node 24, Vite 8, React 19, axios. Dev server on port 3000, proxies `/api` to port 8000. |
 | Git | `github.com/karthikrachala1507/raga-spatial`, branch `main` |
-| Disk | project on D: (618 GB free); C: has about 33 GB free |
+| Disk | project, environment, datasets, models, caches and temp files on D: |
 
-The conda environment stays on C:. Conda environments cannot simply be moved.
+Since 25 November 2026 everything the project reads or writes is under
+`D:\raga-spatial`, set up by `env.bat`. The song folders used for evaluation
+are copied to `data\songs`. Only the Miniconda program itself and Node stay on
+C:. Moving the project folder means re-creating `env\` (conda environments
+hold their own path).
 
 After any `pip install`, check the locked versions:
 
@@ -1163,7 +1169,7 @@ Things that cost time and are not obvious from the code.
   `backend\training\train_separator.py` (training).
 - **Run scripts from `backend\`.** Tools and tests add `backend\` to the
   import path themselves, but relative paths in the old phase tests assume it.
-- **Activate the conda env, or put its folders on PATH.** Calling
+- **Run `call env.bat` first, or put the env folders on PATH.** Calling
   `python.exe` directly without activation fails at the first GPU complex
   operation with `nvrtc: error: failed to open nvrtc-builtins64_118.dll`,
   because that DLL lives in the env's `bin` folder.

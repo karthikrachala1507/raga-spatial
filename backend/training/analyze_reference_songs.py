@@ -25,7 +25,7 @@ import subprocess
 import numpy as np
 import soundfile as sf
 
-SONG_DIR = r"C:\Users\racha\Desktop\music\can be repeated"
+SONG_DIR = os.path.join(paths.DATA_DIR, "songs", "can be repeated")
 
 # name part -> what the owner wants this song to teach
 SONGS = [

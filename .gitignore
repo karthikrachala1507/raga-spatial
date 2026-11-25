@@ -27,3 +27,6 @@ __pycache__/
 
 # Tool settings
 .claude/
+
+# the project's own Python environment
+env/

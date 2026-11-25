@@ -3,7 +3,7 @@ rem Raga Spatial - start or resume training of the 8-stem separator.
 rem Double-click this file, or run it from any terminal.
 rem Pause: press Ctrl+C (answer Y). Resume: run this file again.
 rem It continues from the last finished epoch (data\checkpoints\separator_v3_latest.pt).
-call "C:\ProgramData\miniconda3\condabin\conda.bat" activate raga-spatial
+call "%~dp0env.bat"
 if errorlevel 1 (
     echo ERROR: could not activate the raga-spatial conda environment.
     exit /b 1

@@ -1,7 +1,7 @@
 @echo off
 rem Raga Spatial - v8 fine-tune, reference-song analysis, scorecard and automatic promotion decision.
 rem Starts from v6 (best scorecard so far), 9 stems, stronger balance settings.
-call "C:\ProgramData\miniconda3\condabin\conda.bat" activate raga-spatial
+call "%~dp0env.bat"
 set "LOG=%~dp0data\logs\pipeline_progress.log"
 set NUMBA_CACHE_DIR=%~dp0data\numba_cache
 set PYTHONIOENCODING=utf-8

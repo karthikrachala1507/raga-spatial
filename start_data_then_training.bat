@@ -14,7 +14,7 @@ rem
 rem Every step skips what is already done. Pause with Ctrl+C (answer Y) and run
 rem this file again to continue. Step times are written to
 rem   data\logs\pipeline_progress.log
-call "C:\ProgramData\miniconda3\condabin\conda.bat" activate raga-spatial
+call "%~dp0env.bat"
 if errorlevel 1 (
     echo ERROR: could not activate the raga-spatial conda environment.
     exit /b 1
